@@ -49,7 +49,7 @@ impl From<s2protocol::cache_handles::cache_objects::PlacedObjects> for PlacedObj
 pub struct ObjectDoodad {
     pub id: String,
     pub variation: String,
-    pub position: String,
+    pub position: Option<String>,
     pub rotation: String,
     pub scale: String,
     pub kind: String,
@@ -72,13 +72,13 @@ impl From<s2protocol::cache_handles::cache_objects::ObjectDoodad> for ObjectDood
 #[reflect(Default)]
 pub struct ObjectPoint {
     pub id: String,
-    pub position: String,
+    pub position: Option<String>,
     pub scale: String,
     pub kind: String,
     pub name: String,
-    pub color: String,
-    pub pathing_radius_soft: u32,
-    pub pathing_radius_hard: u32,
+    pub color: Option<String>,
+    pub pathing_radius_soft: f32,
+    pub pathing_radius_hard: f32,
 }
 
 impl From<s2protocol::cache_handles::cache_objects::ObjectPoint> for ObjectPoint {
@@ -101,7 +101,7 @@ impl From<s2protocol::cache_handles::cache_objects::ObjectPoint> for ObjectPoint
 pub struct ObjectUnit {
     pub id: String,
     pub variation: String,
-    pub position: String,
+    pub position: Option<String>,
     pub scale: String,
     pub unit_kind: String,
 }
@@ -220,11 +220,13 @@ pub fn load_cache_objects(
     for unit in &placed_objects.units {
         tracing::info!("{:?}", unit);
         // ObjectUnit { id: "209", variation: "8", position: "97,102.5,0", scale: "1,1,1", unit_kind: "RichMineralField" }
-        let unit_pos: Vec<f32> = unit
-            .position
-            .split(",")
-            .filter_map(|x| x.parse::<f32>().ok())
-            .collect();
+        let unit_pos: Vec<f32> = match unit.position {
+            Some(ref val) => val
+                .split(",")
+                .filter_map(|x| x.parse::<f32>().ok())
+                .collect(),
+            None => continue,
+        };
         if unit_pos.len() != 3 {
             tracing::error!(
                 "Unexpected number of tokens for unit position typed: {}",
@@ -342,11 +344,13 @@ pub fn load_cache_objects(
     // Id="1035" Position="6.0996,150.3146,0" Scale="1,1,1" Type="NoFlyZone" Name="No Fly Zone 011" Color="0,0,0,0" PathingRadiusSoft="5" PathingRadiusHard="4"
     for object_point in &placed_objects.points {
         // These are objects in the map, decorations, animation references, etc.
-        let unit_pos: Vec<f32> = object_point
-            .position
-            .split(",")
-            .filter_map(|x| x.parse::<f32>().ok())
-            .collect();
+        let unit_pos: Vec<f32> = match object_point.position {
+            Some(ref val) => val
+                .split(",")
+                .filter_map(|x| x.parse::<f32>().ok())
+                .collect(),
+            None => continue,
+        };
         if unit_pos.len() != 3 {
             tracing::error!(
                 "Unexpected number of tokens for unit position typed: {}",

@@ -6,7 +6,7 @@ edition = "2024"
 license = "MIT"
 
 [dependencies]
-bevy = { version = "0.19.0", features = [
+bevy = { version = "0.19.1", features = [
     "free_camera",
     "jpeg",
     "dds",
@@ -19,7 +19,7 @@ log = { version = "0.4", features = [
     "max_level_debug",
     "release_max_level_warn",
 ] }
-s2protocol = { path = "../s2protocol-rs/", default-features = false, features = [
+s2protocol = { version = "3.5.8", default-features = false, features = [
     "tracing_info_level",
 ] }
 tracing = { version = "0.1", features = [

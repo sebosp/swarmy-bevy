@@ -1,6 +1,4 @@
 use crate::MAP_SCALE_FACTOR;
-use crate::cli::*;
-use crate::map_plugin::DocumentHeaderResource;
 use crate::map_plugin::MapInfoResource;
 use crate::t3_terrain::T3TerrainResource;
 use bevy::camera::Hdr;

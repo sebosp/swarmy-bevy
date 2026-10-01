@@ -62,10 +62,10 @@ pub struct MapInfoResource {
     pub first_string: String,
     /// Also empty?
     pub second_string: String,
-    // Maybe a mode, light Dark/Light?
-    pub third_string: String,
+    // Maybe a theme, light Dark/Light/Black?
+    pub theme: String,
     // Some name, "Zerus" in the test case, maybe map maker?
-    pub fourth_string: String,
+    pub tile_set: String,
     pub cell_left: usize,
     pub cell_bottom: usize,
     pub cell_right: usize,
@@ -80,10 +80,10 @@ impl From<s2protocol::cache_handles::map_info::MapInfo> for MapInfoResource {
             file_version: src.file_version,
             cell_width: src.cell_width,
             cell_height: src.cell_height,
-            first_string: src.first_string,
-            second_string: src.second_string,
-            third_string: src.third_string,
-            fourth_string: src.fourth_string,
+            first_string: src.first_string.unwrap_or_default(),
+            second_string: src.second_string.unwrap_or_default(),
+            theme: src.theme,
+            tile_set: src.tile_set,
             cell_left: src.cell_left,
             cell_bottom: src.cell_bottom,
             cell_right: src.cell_right,
@@ -128,12 +128,17 @@ impl From<s2protocol::cache_handles::document_header::DocumentHeader> for Docume
 
 /// Attempts to load the available resources from the downloaded caches.
 pub fn load_cache_depot_map_resources(mut commands: Commands, cli_params: Res<CliParams>) {
-    let cache_collection = s2protocol::cache_handles::CacheCollection::new(
-        cli_params.path.clone(),
-        cli_params.ids.clone(),
-    );
-    match cache_collection.load_t3_height_map() {
-        Ok(t3_height_map) => {
+    let mut cache_builder =
+        s2protocol::cache_handles::CacheCollection::new(cli_params.path.clone());
+    let cache_ids = cli_params
+        .ids
+        .split(",")
+        .map(|x| x.to_string())
+        .collect::<Vec<String>>();
+    cache_builder.add_cache_ids(&cache_ids);
+    match cache_builder.build_map_cache(&cache_ids) {
+        Ok(map_cache) => {
+            let t3_height_map = map_cache.t3_height_map;
             let max_map_dim = t3_height_map.width.max(t3_height_map.height);
             let mut cell_x_y_data: Vec<u8> = Vec::with_capacity(max_map_dim * max_map_dim);
             for _ in 0..(max_map_dim * max_map_dim) {
@@ -157,33 +162,9 @@ pub fn load_cache_depot_map_resources(mut commands: Commands, cli_params: Res<Cl
                 height: t3_height_map.height as usize,
             };
             commands.insert_resource(t3_height_map_res);
-        }
-        Err(err) => {
-            error!(
-                "Unable to find '{}' embedded in the cache handles directory: {}: {}",
-                T3_HEIGHT_MAP_FILE_NAME,
-                cli_params.path,
-                err.to_string(),
-            );
-            commands.spawn(MapPluginError::new("load_t3_height_map", err));
-        }
-    }
-    match cache_collection.load_map_info() {
-        Ok(val) => {
-            let map_info_res = MapInfoResource::from(val);
+            let map_info_res = MapInfoResource::from(map_cache.map_info);
             commands.insert_resource(map_info_res);
-        }
-        Err(err) => {
-            tracing::error!(
-                "Unable to locate '{}' in the cache handles provided: {:?}",
-                MAP_INFO_FILE_NAME,
-                err
-            );
-            commands.spawn(MapPluginError::new("load_map_info", err));
-        }
-    }
-    match cache_collection.load_document_header() {
-        Ok(mut document_header) => {
+            let mut document_header = map_cache.document_header.clone();
             tracing::debug!("docu header: {:?}", document_header);
 
             // Remove double new lines to save space in the UI.
@@ -205,35 +186,23 @@ pub fn load_cache_depot_map_resources(mut commands: Commands, cli_params: Res<Cl
 
             desc_lines.push(curr_str.replace("<n/>", "\n"));
             document_header.description_long = desc_lines.join("\n");
-            if let Ok(t3_terrain) = cache_collection.load_t3_terrain()
-                && let Ok(t3_terrain_res) = T3TerrainResource::try_from(t3_terrain)
-            {
+            if let Ok(t3_terrain_res) = T3TerrainResource::try_from(map_cache.t3_terrain) {
                 commands.insert_resource(t3_terrain_res);
             }
             let document_header_res = DocumentHeaderResource::from(document_header);
             commands.insert_resource(document_header_res);
-        }
-        Err(err) => {
-            tracing::error!(
-                "Unable to locate '{}' in the cache handles provided: {:?}",
-                DOCUMENT_HEADER_FILE_NAME,
-                err
-            );
-            commands.spawn(MapPluginError::new("load_document_header", err));
-        }
-    }
-    match cache_collection.load_objects() {
-        Ok(placed_objects) => {
-            tracing::debug!("docu header: {:?}", placed_objects);
+            let placed_objects = map_cache.placed_objects;
+            tracing::debug!("placed objects: {:?}", placed_objects);
             let placed_obj_res: PlacedObjectsResource = placed_objects.into();
             commands.insert_resource(placed_obj_res);
         }
         Err(err) => {
-            tracing::error!(
-                "Unable to locate DocumentHeader in the cache handles provided: {:?}",
-                err
+            error!(
+                "Unable to collect map cache: {}: {:?}",
+                cli_params.path,
+                err.to_string(),
             );
-            commands.spawn(MapPluginError::new("load_document_header", err));
+            commands.spawn(MapPluginError::new("map_cache", err));
         }
-    }
+    };
 }

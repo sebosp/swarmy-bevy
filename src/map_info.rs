@@ -15,8 +15,8 @@ pub fn show_map_info(
             "{} - {}\n\
                 MapInfo Dimensions: {} - {}\n\
                 TerrainHeight Dimensions: {} - {}",
-            map_info.third_string,
-            map_info.fourth_string,
+            map_info.theme,
+            map_info.tile_set,
             map_info.playable_dimensions.x,
             map_info.playable_dimensions.y,
             t3_height_map.width,

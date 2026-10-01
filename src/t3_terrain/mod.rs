@@ -81,15 +81,18 @@ impl TryFrom<s2protocol::cache_handles::t3_terrain::T3Terrain> for T3TerrainReso
     fn try_from(
         input: s2protocol::cache_handles::t3_terrain::T3Terrain,
     ) -> Result<Self, Self::Error> {
-        Ok(Self {
-            version: input.version,
-            ramp_list: input
-                .height_map
-                .ramp_list
+        let ramp_list = match input.height_map.ramp_list {
+            Some(val) => val
                 .inner
                 .into_iter()
                 .filter_map(|x| x.try_into().ok())
                 .collect(),
+            None => vec![],
+        };
+
+        Ok(Self {
+            version: input.version,
+            ramp_list,
         })
     }
 }
@@ -100,21 +103,19 @@ impl TryFrom<s2protocol::cache_handles::t3_terrain::Ramp> for RampResource {
         // The "hi" units seem to be relative to the "lo" absolute points in the cell grid.
         let left_lo = parse_ramp_corner(&input.left_lo)?;
         let mut left_hi = parse_ramp_corner(&input.left_hi)?;
-        left_hi.x = left_lo.x - left_hi.x;
-        left_hi.y = left_lo.y - left_hi.y;
+        left_hi.center = left_lo.center - left_hi.center;
 
         let right_lo = parse_ramp_corner(&input.right_lo)?;
         let mut right_hi = parse_ramp_corner(&input.right_hi)?;
-        right_hi.x = right_lo.x - right_hi.x;
-        right_hi.y = right_lo.y - right_hi.y;
+        right_hi.center = right_lo.center - right_hi.center;
         let res = Self {
             dir: input.dir.try_into()?,
             hi: input.hi,
             lo: input.lo,
-            left_lo: left_lo,
-            left_hi: left_hi,
-            right_lo: right_lo,
-            right_hi: right_hi,
+            left_lo: left_lo.center,
+            left_hi: left_hi.center,
+            right_lo: right_lo.center,
+            right_hi: right_hi.center,
             base: input.base.clone(),
             mid: input.mid.clone(),
             cid: input.cid,
@@ -155,9 +156,19 @@ fn parse_ramp_corner(s: &str) -> Result<RampCorner, BevySC2MapError> {
     let (tail, _) = tag("c=(")(tail)?;
     let (tail, cx) = take_until(", ")(tail)?;
     let (tail, _) = tag(", ")(tail)?;
-    let (_, cy) = take_until(") ")(tail)?;
+    let (tail, cy) = take_until(") ")(tail)?;
+    let (tail, _) = tag(") w=")(tail)?;
+    let (tail, width_str) = take_until(" ")(tail)?;
+    let (tail, _) = tag(" ")(tail)?;
+    let height_str = tail;
+    let center = x_y_to_vec2(cx, cy)?;
+    let height = height_str.parse()?;
+    let width = width_str.parse()?;
     Ok(RampCorner {
-        c: x_y_to_vec2(cx, cy)?,
+        center,
+        height,
+        width,
+        ..Default::default()
     })
 }
 

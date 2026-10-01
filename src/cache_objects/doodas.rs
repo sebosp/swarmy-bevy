@@ -52,11 +52,13 @@ pub fn load_object_doodas(
     // Id="1231" Position="118.1433,8.0437,6.9763" Scale="1,1,1" Type="Shadow_Platform_Ramp"
     for (doodad_ith, doodad) in placed_objects.doodas.iter().enumerate() {
         // These are objects in the map, decorations, animation references, etc.
-        let unit_pos: Vec<f32> = doodad
-            .position
-            .split(",")
-            .filter_map(|x| x.parse::<f32>().ok())
-            .collect();
+        let unit_pos: Vec<f32> = match doodad.position {
+            Some(ref pos) => pos
+                .split(",")
+                .filter_map(|x| x.parse::<f32>().ok())
+                .collect(),
+            None => continue,
+        };
         if unit_pos.len() != 3 {
             tracing::error!(
                 "Unexpected number of tokens for unit position typed: {}",
