@@ -19,7 +19,7 @@ log = { version = "0.4", features = [
     "max_level_debug",
     "release_max_level_warn",
 ] }
-s2protocol = { version = "3.5.8", default-features = false, features = [
+s2protocol = { version = "3.5.9", default-features = false, features = [
     "tracing_info_level",
 ] }
 tracing = { version = "0.1", features = [
@@ -33,6 +33,7 @@ clap = { version = "4.6", features = ["derive"] }
 chrono = "0.4"
 serde = { version = "1.0", features = ["derive"] }
 serde-xml-rs = "0.8"
+blake3 = { version = "1.8", features = ["pure"] }
 
 [dev-dependencies]
 test-log = { version = "0.2", features = ["trace"] }
@@ -42,7 +43,8 @@ test-log = { version = "0.2", features = ["trace"] }
 default = ["dev"]
 dev = [
     # Improve compile times for dev builds by linking Bevy as a dynamic library.
-    "bevy/dynamic_linking",
+    # This needs to be removed when release mode compiling to bundle with swarmy.
+    # "bevy/dynamic_linking",
     "bevy/bevy_dev_tools",
     "bevy/bevy_ui_debug",
     # Improve error messages coming from Bevy
