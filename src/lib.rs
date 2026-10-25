@@ -8,23 +8,29 @@ pub use s2protocol::cache_handles::map::coords::*;
 pub use s2protocol::cache_handles::map_info::*;
 pub use s2protocol::cache_handles::t3_height_map::*;
 
-pub mod t3_height_map;
-pub use t3_height_map::*;
 pub mod cache_objects;
-pub use cache_objects::*;
-pub mod t3_terrain;
-pub use t3_terrain::*;
-
 pub mod cli;
-
+pub mod document_header;
+pub mod embedded_assets;
+pub mod map_info;
+pub mod replay;
+pub mod screenshot;
+pub mod swarmy_feathers;
+pub mod t3_height_map;
+pub mod t3_terrain;
 pub mod utils;
-pub use utils::*;
+
+pub mod map_plugin;
 
 pub const MAP_SCALE_FACTOR: f32 = 0.1;
 
 // Holds the scene handle
 #[derive(Resource)]
 pub struct MapScene(pub Handle<Gltf>);
+
+/// Show some text if there's a current action
+#[derive(Default, Component, Reflect, Clone)]
+pub struct SelectedObjectName(pub String);
 
 /// From gltf_pbr/src/gltf.rs, temp fix because I don't know how to load these materials...
 /// Converts a [`GltfMaterial`] to a [`StandardMaterial`]

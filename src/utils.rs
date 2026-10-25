@@ -1,10 +1,10 @@
+use crate::error::*;
+use bevy::log::tracing;
+use bevy::prelude::*;
 /// Basic utils
 use std::fs::File;
 use std::io::prelude::*;
 use tracing::instrument;
-use bevy::log::tracing;
-use bevy::prelude::*;
-use crate::error::*;
 
 // We can create our own gizmo config group!
 #[derive(Default, bevy::reflect::Reflect, GizmoConfigGroup)]

@@ -1,0 +1,119 @@
+name: Sidecar release
+
+# Builds the swarmy-bevy binary for each platform with the name Tauri expects for a sidecar,
+# `swarmy-bevy-<target triple>[.exe]`, so that swarmy can download it into its `assets` directory
+# (see `scripts/download-sidecars.sh` in swarmy). The targets match the rerun-cli releases, the
+# other sidecar of swarmy, plus Intel macOS.
+#
+# Pushing a `v*` tag creates a GitHub release with the binaries, the pull requests and running it
+# manually only upload them as workflow artifacts unless a version is given.
+
+on:
+  push:
+    tags: ["v*"]
+  # The pull requests build the sidecars of every platform without releasing them.
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "The release tag, i.e. `v0.2.0`, empty to only upload the workflow artifacts"
+        required: false
+        type: string
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-22.04
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-22.04-arm
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            extension: .exe
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          # Cross compiled on Apple Silicon.
+          - target: x86_64-apple-darwin
+            os: macos-latest
+    steps:
+      - name: Checkout swarmy-bevy
+        uses: actions/checkout@v4
+        with:
+          path: swarmy-bevy
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Restore Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: swarmy-bevy
+          key: ${{ matrix.target }}
+
+      - name: Install build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
+
+      # The dev features are not bundled, see src/bin/tauri-sidecar.rs.
+      - name: Build
+        working-directory: swarmy-bevy
+        shell: bash
+        run: cargo build --release --locked --no-default-features --bin swarmy-bevy --target ${{ matrix.target }}
+
+      - name: Name the sidecar
+        shell: bash
+        run: |
+          mkdir dist
+          cp "swarmy-bevy/target/${{ matrix.target }}/release/swarmy-bevy${{ matrix.extension }}" \
+            "dist/swarmy-bevy-${{ matrix.target }}${{ matrix.extension }}"
+          ls -l dist
+
+      - name: Upload the sidecar
+        uses: actions/upload-artifact@v4
+        with:
+          name: swarmy-bevy-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    name: Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.version != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download the sidecars
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create the release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.version || github.ref_name }}
+          files: dist/*
+          fail_on_unmatched_files: true
+          body: |
+            The swarmy-bevy sidecars for swarmy, named `swarmy-bevy-<target triple>`, as Tauri
+            expects them in swarmy's `assets` directory. swarmy's `scripts/download-sidecars.sh`
+            downloads the one of the current platform.

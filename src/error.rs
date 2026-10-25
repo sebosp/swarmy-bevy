@@ -1,5 +1,6 @@
 //! Error handling of BevySC2MapError
 
+use std::num::ParseFloatError;
 use std::num::TryFromIntError;
 
 use nom::error::ErrorKind;
@@ -11,25 +12,28 @@ pub type BevySC2MapResult<I, O> = Result<(I, O), BevySC2MapError>;
 #[derive(thiserror::Error, Debug)]
 pub enum BevySC2MapError {
     /// Unable to parse the MPQ file, could be corrupted or not a replay file
-    #[error("MPQ Error")]
+    #[error("MPQ")]
     MPQ(#[from] nom_mpq::MPQParserError),
     /// Unable to parse the byte aligned data types
-    #[error("Nom ByteAligned Error {0}")]
+    #[error("Nom ByteAligned {0}")]
     ByteAligned(String),
     /// Unable to parse the MPQ file, could be corrupted or not a replay file
-    #[error("S2ProtocolError")]
+    #[error("S2Protocol")]
     S2Proto(#[from] s2protocol::S2ProtocolError),
     /// Unable to parse a value that should have been an integer
-    #[error("TryFromIntError")]
+    #[error("TryFromInt")]
     ValueError(#[from] TryFromIntError),
     /// An I/O Error
-    #[error("IO Error")]
+    #[error("IO")]
     IoError(#[from] std::io::Error),
     /// Conversion to UTF-8 failed, from the `Vec<u8>` "name" fields in the proto fields
-    #[error("Utf8 conversion error")]
+    #[error("Utf8 conversion")]
     Utf8Error(#[from] std::str::Utf8Error),
+    /// Parse Float Error
+    #[error("Parse float")]
+    ParseFloat(#[from] ParseFloatError),
     /// Other error
-    #[error("Other Error: {0}")]
+    #[error("Other {0}")]
     Other(String),
 }
 

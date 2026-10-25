@@ -1,46 +1,54 @@
 use bevy::camera_controller::free_camera::FreeCameraPlugin;
+use bevy::feathers::dark_theme::create_dark_theme;
+use bevy::feathers::{FeathersPlugins, theme::UiTheme};
 use bevy::prelude::*;
 use bevy_skein::SkeinPlugin;
 use clap::Parser;
 use swarmy_bevy::MapScene;
-use swarmy_bevy::t3_height_map::load_t3_height_map;
-use swarmy_bevy::t3_terrain::load_t3_terrain;
-use swarmy_bevy::utils::*;
-use swarmy_bevy::{cli::*, load_cache_objects};
-
-#[derive(Default, Reflect, GizmoConfigGroup)]
-pub struct MapPlugin;
-
-impl Plugin for MapPlugin {
-    fn build(&self, app: &mut App) {
-        app.add_systems(Startup, setup_light_and_gizmo_control_text);
-        app.add_systems(Startup, load_t3_height_map);
-        app.add_systems(Update, load_cache_objects);
-        app.add_systems(Update, load_t3_terrain);
-        app.add_systems(Update, update_gizmo_config);
-    }
-}
-
-/// Show some text if there's a current action
-#[derive(Default, Resource, Reflect)]
-pub struct ActivityStage(String);
+use swarmy_bevy::cli::*;
+use swarmy_bevy::embedded_assets::{EmbeddedAssetsPlugin, SWARMY_OBJECTS_GLTF};
+use swarmy_bevy::replay::ReplayData;
+use swarmy_bevy::replay::plugin::{ReplayPlugin, ReplayStartSeconds};
 
 fn main() {
     let args = Args::parse();
-    // store the name in a resource so we can access it in our systems
-
     let path = args.path.trim_end_matches('/').to_string();
-    App::new()
-        .insert_resource(CliParams {
-            path,
-            ids: args.ids,
+    // The replay has the cache ids of its map.
+    let replay = args.replay.as_deref().map(|replay| {
+        ReplayData::load(replay).unwrap_or_else(|err| {
+            eprintln!("Unable to read the replay {replay}: {err:?}");
+            std::process::exit(1);
         })
-        .init_gizmo_group::<MyRoundGizmos>()
-        .add_plugins(DefaultPlugins)
-        .add_plugins(SkeinPlugin::default())
-        .add_plugins(FreeCameraPlugin)
-        .add_plugins(MapPlugin)
+    });
+    let ids = match (&replay, args.ids) {
+        (Some(replay), _) => replay.cache_handle_ids.join(","),
+        (None, Some(ids)) => ids,
+        (None, None) => unreachable!("clap requires --ids without --replay"),
+    };
+    let mut app = App::new();
+    if let Some(replay) = replay {
+        app.insert_resource(replay)
+            .insert_resource(ReplayStartSeconds(args.replay_seconds))
+            .add_plugins(ReplayPlugin);
+    }
+    app.insert_resource(CliParams { path, ids })
+        .insert_resource(ScreenshotParams {
+            path: args.screenshot,
+        })
+        .init_gizmo_group::<swarmy_bevy::utils::MyRoundGizmos>()
+        .add_plugins((
+            DefaultPlugins,
+            EmbeddedAssetsPlugin,
+            FeathersPlugins,
+            SkeinPlugin::default(),
+            FreeCameraPlugin,
+            swarmy_bevy::map_plugin::MapPlugin,
+            MeshPickingPlugin,
+            swarmy_bevy::screenshot::ScreenshotPlugin,
+        ))
+        .insert_resource(UiTheme(create_dark_theme()))
         .add_systems(PreStartup, load_gltf)
+        .add_systems(Startup, setup_light_and_gizmo_control_text)
         .run();
 }
 
@@ -54,7 +62,8 @@ fn setup_light_and_gizmo_control_text(mut commands: Commands) {
         Transform::from_xyz(4.0, 8.0, 4.0),
     ));
 
-    // example instructions
+    // basic instructions
+    // However other plugins have more controls, such as F1/F2 for brightness, etc.
     commands.spawn((
         Text::new(
             "Controls:\n\
@@ -65,7 +74,7 @@ fn setup_light_and_gizmo_control_text(mut commands: Commands) {
         ),
         Node {
             position_type: PositionType::Absolute,
-            top: px(12),
+            bottom: px(12),
             left: px(12),
             ..default()
         },
@@ -74,13 +83,6 @@ fn setup_light_and_gizmo_control_text(mut commands: Commands) {
             ..default()
         },
     ));
-}
-
-#[derive(Component, Default, Reflect, Debug)]
-#[reflect(Component, Default)]
-#[type_path = "api"]
-struct Character {
-    name: String,
 }
 
 fn load_gltf(mut commands: Commands, asset_server: Res<AssetServer>) {
@@ -96,6 +98,6 @@ fn load_gltf(mut commands: Commands, asset_server: Res<AssetServer>) {
             z: 10.,
         }),
     ));*/
-    let gltf = asset_server.load("swarmy-objects.gltf");
+    let gltf = asset_server.load(SWARMY_OBJECTS_GLTF);
     commands.insert_resource(MapScene(gltf));
 }

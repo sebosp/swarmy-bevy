@@ -4,17 +4,25 @@ authors = ["Seb Ospina <kraige@gmail.com>"]
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
+default-run = "swarmy-bevy"
 
 [dependencies]
-bevy = { version = "0.19.0", features = ["free_camera", "jpeg", "dds", "tga"] }
-bevy_skein = "0.6.0"
+bevy = { version = "0.20.0", features = [
+    "free_camera",
+    "jpeg",
+    "dds",
+    "tga",
+    "bevy_feathers",
+] }
+bevy_skein = "0.7.0-rc.1"
 # Compile low-severity logs out of native builds for performance.
 log = { version = "0.4", features = [
     "max_level_debug",
     "release_max_level_warn",
 ] }
-s2protocol = { path = "../s2protocol-rs/", default-features = false, features = [
+s2protocol = { version = "3.6.0", default-features = false, features = [
     "tracing_info_level",
+    "textures",
 ] }
 tracing = { version = "0.1", features = [
     "max_level_debug",
@@ -27,6 +35,7 @@ clap = { version = "4.6", features = ["derive"] }
 chrono = "0.4"
 serde = { version = "1.0", features = ["derive"] }
 serde-xml-rs = "0.8"
+blake3 = { version = "1.8", features = ["pure"] }
 
 [dev-dependencies]
 test-log = { version = "0.2", features = ["trace"] }
@@ -36,7 +45,8 @@ test-log = { version = "0.2", features = ["trace"] }
 default = ["dev"]
 dev = [
     # Improve compile times for dev builds by linking Bevy as a dynamic library.
-    "bevy/dynamic_linking",
+    # This needs to be removed when release mode compiling to bundle with swarmy.
+    # "bevy/dynamic_linking",
     "bevy/bevy_dev_tools",
     "bevy/bevy_ui_debug",
     # Improve error messages coming from Bevy
