@@ -38,3 +38,21 @@ impl Plugin for EmbeddedAssetsPlugin {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A checkout without Git LFS has pointer files instead of the scene.
+    #[test]
+    fn it_embeds_the_scene_not_the_lfs_pointers() {
+        for (name, bytes) in EMBEDDED_FILES {
+            assert!(
+                !bytes.starts_with(b"version https://git-lfs"),
+                "{name} is a Git LFS pointer, fetch the LFS files"
+            );
+        }
+        let gltf = std::str::from_utf8(EMBEDDED_FILES[0].1).unwrap();
+        assert!(gltf.trim_start().starts_with('{') && gltf.contains("\"asset\""));
+    }
+}

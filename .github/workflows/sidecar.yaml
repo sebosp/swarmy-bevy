@@ -54,6 +54,8 @@ jobs:
         uses: actions/checkout@v4
         with:
           path: swarmy-bevy
+          # The Blender scene embedded in the binary is stored with Git LFS.
+          lfs: true
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable

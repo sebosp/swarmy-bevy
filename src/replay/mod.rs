@@ -20,6 +20,16 @@ use std::path::PathBuf;
 /// The map cells aggregated into one cell of the bars, a 4x4 square.
 pub const AGGREGATE_CELLS: u32 = 4;
 
+/// The game loops per second at Faster speed, the speed of the ladder and the tournaments.
+/// `s2protocol::convert_tracker_loop_to_seconds` uses 68.58 ms per loop, about 14.6 loops per
+/// second, the game times would be 1.5 times longer than in the game and in swarmy.
+pub const GAME_LOOPS_PER_SECOND: f64 = 22.4;
+
+/// The game seconds of a tracker loop at Faster speed.
+pub fn loop_seconds(tracker_loop: i64) -> u32 {
+    (tracker_loop.max(0) as f64 / GAME_LOOPS_PER_SECOND) as u32
+}
+
 /// The time moves forward and backwards in steps of these many game seconds.
 pub const TIME_STEP_SECONDS: u32 = 30;
 
@@ -233,7 +243,7 @@ impl ReplayData {
             else {
                 continue;
             };
-            let seconds = s2protocol::convert_tracker_loop_to_seconds(*tracker_loop);
+            let seconds = loop_seconds(*tracker_loop);
             data.duration_seconds = data.duration_seconds.max(seconds);
             match (event, &item.change_hint) {
                 (
@@ -425,6 +435,13 @@ mod tests {
 
     /// A replay of the s2protocol-rs checkout next to this one.
     const REPLAY: &str = "../s2protocol-rs/assets/FieldsDeath202507.SC2Replay";
+
+    #[test]
+    fn it_converts_the_loops_at_faster_speed() {
+        // 25:21 of game time.
+        assert_eq!(loop_seconds(34071), 25 * 60 + 21);
+        assert_eq!(loop_seconds(-5), 0);
+    }
 
     #[test]
     fn it_cleans_the_clan_tag() {

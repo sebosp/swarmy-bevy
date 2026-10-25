@@ -41,6 +41,9 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          # The Blender scene embedded in the binary is stored with Git LFS.
+          lfs: true
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
