@@ -269,11 +269,11 @@ pub fn load_cache_objects(
             continue;
         };
         let unit_material = MeshMaterial3d(
-            materials.add(standard_material_from_gltf_material(&unit_gltf_material)),
+            materials.add(standard_material_from_gltf_material(unit_gltf_material)),
         );
         let x = unit_pos[0];
         let y = unit_pos[1];
-        let target_vec_pos = y as usize * t3_height_map_res.width as usize + x as usize;
+        let target_vec_pos = y as usize * t3_height_map_res.width + x as usize;
         let cell_height = t3_height_map_res.data[target_vec_pos];
         let mineral_transform = Transform::from_xyz(
             MAP_SCALE_FACTOR * y,
@@ -388,7 +388,7 @@ pub fn load_cache_objects(
         let x = unit_pos[0];
         let y = unit_pos[1];
         let z = unit_pos[2];
-        let target_vec_pos = y as usize * t3_height_map_res.width as usize + x as usize;
+        let target_vec_pos = y as usize * t3_height_map_res.width + x as usize;
         let cell_height = t3_height_map_res.data[target_vec_pos];
 
         let Some(unit_handle) = gltf.named_materials.get(object_point.kind.as_str()) else {
@@ -406,10 +406,10 @@ pub fn load_cache_objects(
             continue;
         };
         let object_point_material = MeshMaterial3d(
-            materials.add(standard_material_from_gltf_material(&unit_gltf_material)),
+            materials.add(standard_material_from_gltf_material(unit_gltf_material)),
         );
-        let pathing_radius_soft = object_point.pathing_radius_soft as f32;
-        let _pathing_radius_hard = object_point.pathing_radius_hard as f32;
+        let pathing_radius_soft = object_point.pathing_radius_soft;
+        let _pathing_radius_hard = object_point.pathing_radius_hard;
         let torus_mesh = Mesh3d(meshes.add(Torus::new(0.2, 0.25)));
         let cylinder_mesh = Mesh3d(meshes.add(Cylinder::new(
             pathing_radius_soft * NO_FLY_ZONE_RADIUS * MAP_SCALE_FACTOR,

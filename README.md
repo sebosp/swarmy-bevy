@@ -106,8 +106,8 @@ cargo run --bin tauri-sidecar -- ../swarmy/assets x86_64-pc-windows-gnu
 `.github/workflows/sidecar.yaml` builds the sidecar for Linux (x86_64, aarch64), Windows (x86_64)
 and macOS (Apple Silicon, Intel), named `swarmy-bevy-<target triple>[.exe]`. Pushing a `v*` tag
 creates a GitHub release with them, swarmy's `scripts/download-sidecars.sh` downloads the one of
-the platform. The older `release.yaml` and `ci.yaml` are the bevy_cli
-templates, they are not set up for this repository yet.
+the platform, the pull requests to main build them without releasing them. `ci.yaml` checks the
+formatting, Clippy lints, documentation and tests.
 
 `build.rs` provides the target triple. It cannot copy the binary itself because build scripts run
 before the binary is compiled.

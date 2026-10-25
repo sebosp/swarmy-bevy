@@ -95,7 +95,7 @@ pub fn load_object_doodas(
             continue;
         };
         let dooda_material = MeshMaterial3d(
-            materials.add(standard_material_from_gltf_material(&unit_gltf_material)),
+            materials.add(standard_material_from_gltf_material(unit_gltf_material)),
         );
 
         let shadow_platform_ramp_transform = Transform::from_xyz(

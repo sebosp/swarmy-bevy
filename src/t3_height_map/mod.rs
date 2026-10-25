@@ -1,17 +1,13 @@
 use crate::MAP_SCALE_FACTOR;
 use crate::map_plugin::MapInfoResource;
-use crate::t3_terrain::T3TerrainResource;
 use bevy::camera::Hdr;
 use bevy::camera_controller::free_camera::FreeCamera;
 use bevy::color::palettes;
 use bevy::core_pipeline::prepass::{DepthPrepass, NormalPrepass};
 use bevy::core_pipeline::tonemapping::Tonemapping;
-use bevy::log::tracing;
 use bevy::post_process::bloom::Bloom;
 use bevy::prelude::*;
 use s2protocol::cache_handles::map::coords::*;
-use s2protocol::cache_handles::map_info::*;
-use serde::{Deserialize, Serialize};
 
 pub const CELL_HEIGHT_MULTIPLIER: f32 = 5.;
 

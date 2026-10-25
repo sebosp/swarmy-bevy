@@ -192,7 +192,7 @@ pub fn load_cache_depot_map_resources(
             let mut curr_str = String::from("");
             for chunk in chunks {
                 if curr_str.len() < line_len {
-                    curr_str.push_str(" ");
+                    curr_str.push(' ');
                     curr_str.push_str(chunk);
                 } else {
                     desc_lines.push(curr_str.replace("<n/>", "\n"));

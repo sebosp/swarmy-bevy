@@ -130,7 +130,7 @@ impl TryFrom<s2protocol::cache_handles::t3_terrain::Ramp> for RampResource {
     }
 }
 
-///
+/// A corner of a ramp, its center and the direction up the ramp.
 #[derive(Resource, Default, Reflect, Debug)]
 #[reflect(Resource, Default)]
 pub struct RampCorner {
@@ -151,7 +151,7 @@ pub struct RampCorner {
 /// There are maybe 10 maybe 100 ramps per maps and it's only read once, maybe String is fine by now.
 fn parse_ramp_corner(s: &str) -> Result<RampCorner, BevySC2MapError> {
     let (tail, _) = tag("u(")(s)?;
-    let (tail, ux) = take_until(", ")(tail)?;
+    let (tail, _ux) = take_until(", ")(tail)?;
     let (tail, _) = take_until("c=(")(tail)?;
     let (tail, _) = tag("c=(")(tail)?;
     let (tail, cx) = take_until(", ")(tail)?;

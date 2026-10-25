@@ -5,12 +5,15 @@ name: Sidecar release
 # (see `scripts/download-sidecars.sh` in swarmy). The targets match the rerun-cli releases, the
 # other sidecar of swarmy, plus Intel macOS.
 #
-# Pushing a `v*` tag creates a GitHub release with the binaries, running it manually only uploads
-# them as workflow artifacts unless a version is given.
+# Pushing a `v*` tag creates a GitHub release with the binaries, the pull requests and running it
+# manually only upload them as workflow artifacts unless a version is given.
 
 on:
   push:
     tags: ["v*"]
+  # The pull requests build the sidecars of every platform without releasing them.
+  pull_request:
+    branches: [main]
   workflow_dispatch:
     inputs:
       version:
