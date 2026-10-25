@@ -2,15 +2,15 @@ use crate::BevySC2MapError;
 use crate::MAP_SCALE_FACTOR;
 use crate::swarmy_feathers::DisplayInfoOnClick;
 use crate::swarmy_feathers::update_info_on_click;
-use crate::t3_height_map::CELL_HEIGHT_MULTIPLIER;
-use crate::t3_height_map::T3HeightMapResource;
+use crate::t3_height_map::{T3HeightMapResource, terrain_top};
 use bevy::color::palettes;
+use bevy::log::tracing;
 use bevy::prelude::*;
 use nom::bytes::complete::tag;
 use nom::bytes::complete::take_until;
 
-pub const RAMP_SIZE: f32 = 1.0;
-pub const RAMP_HEIGHT: f32 = 1.0;
+pub mod ramp_cells;
+use ramp_cells::RampCellKind;
 
 /// A copy of the T3Terrain that impls Reflect, Resource.
 #[derive(Resource, Default, Reflect, Debug)]
@@ -124,7 +124,7 @@ impl TryFrom<s2protocol::cache_handles::t3_terrain::Ramp> for RampResource {
             right_lo_var: input.right_lo_var,
             right_hi_var: input.right_hi_var,
         };
-        tracing::info!("try_from: input: {input:?}, output: {res:?}",);
+        tracing::debug!("try_from: input: {input:?}, output: {res:?}",);
 
         Ok(res)
     }
@@ -159,8 +159,8 @@ fn parse_ramp_corner(s: &str) -> Result<RampCorner, BevySC2MapError> {
     let (tail, cy) = take_until(") ")(tail)?;
     let (tail, _) = tag(") w=")(tail)?;
     let (tail, width_str) = take_until(" ")(tail)?;
-    let (tail, _) = tag(" ")(tail)?;
-    let height_str = tail;
+    let (tail, _) = tag(" h=")(tail)?;
+    let height_str = tail.trim();
     let center = x_y_to_vec2(cx, cy)?;
     let height = height_str.parse()?;
     let width = width_str.parse()?;
@@ -176,7 +176,17 @@ fn x_y_to_vec2(x_str: &str, y_str: &str) -> Result<Vec2, BevySC2MapError> {
     Ok(Vec2::new(x_str.parse()?, y_str.parse()?))
 }
 
-/// Loads the t3 terrain with ramps
+/// Marks the ramp cells, to show or hide them from the View menu.
+#[derive(Component, Default, Reflect, Debug)]
+#[reflect(Component, Default)]
+pub struct RampComponent;
+
+/// The thickness of the ramp tiles drawn on top of the terrain.
+pub const RAMP_TILE_THICKNESS: f32 = 0.2;
+
+/// Draws the cells of each ramp as tiles going up from the low ground to the high ground, the
+/// ramp cells in amber, the buildable top row of the straight ramps in lime and the sides of the
+/// ramps, not pathable, in red, in grays for a replay.
 pub fn load_t3_terrain(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -184,125 +194,99 @@ pub fn load_t3_terrain(
     t3_terrain: ResMut<T3TerrainResource>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut loaded: Local<bool>,
+    replay: Option<Res<crate::replay::ReplayData>>,
 ) {
     if *loaded {
         return;
     }
     *loaded = true;
+    let tile_mesh = Mesh3d(meshes.add(Cuboid::from_size(Vec3::new(
+        MAP_SCALE_FACTOR,
+        RAMP_TILE_THICKNESS * MAP_SCALE_FACTOR,
+        MAP_SCALE_FACTOR,
+    ))));
+    // A replay is drawn in grays so that the ramps do not look like the bars of the players.
+    let (ramp_color, top_color, edge_color) = if replay.is_some() {
+        (
+            palettes::tailwind::STONE_400,
+            palettes::tailwind::STONE_200,
+            palettes::tailwind::STONE_600,
+        )
+    } else {
+        (
+            palettes::tailwind::AMBER_400,
+            palettes::tailwind::LIME_400,
+            palettes::tailwind::RED_600,
+        )
+    };
+    let ramp_material = MeshMaterial3d(materials.add(Color::from(ramp_color)));
+    let top_material = MeshMaterial3d(materials.add(Color::from(top_color)));
+    let edge_material = MeshMaterial3d(materials.add(Color::from(edge_color)));
     for (ramp_ith, ramp) in t3_terrain.ramp_list.iter().enumerate() {
-        // low
-        let left_lo_x = ramp.left_lo.x * MAP_SCALE_FACTOR;
-        let left_lo_y = ramp.left_lo.y * MAP_SCALE_FACTOR;
-        let right_lo_x = ramp.right_lo.x * MAP_SCALE_FACTOR;
-        let right_lo_y = ramp.right_lo.y * MAP_SCALE_FACTOR;
+        let Some(cells) = ramp_cells::ramp_cells(&ramp.dir, ramp.left_lo, ramp.right_lo) else {
+            tracing::warn!("Ramp {ramp_ith} {:?}: the ramp algorithm failed", ramp.dir);
+            continue;
+        };
+        // The low and high ground around the ramp.
+        let heights: Vec<u8> = cells
+            .iter()
+            .flat_map(|ramp_cell| {
+                let IVec2 { x, y } = ramp_cell.cell;
+                [
+                    (x - 1, y - 1),
+                    (x + 2, y - 1),
+                    (x - 1, y + 2),
+                    (x + 2, y + 2),
+                ]
+            })
+            .filter_map(|(x, y)| t3_height_map_res.height_at(x, y))
+            .collect();
+        let low = heights.iter().copied().min().unwrap_or_default();
+        let high = heights.iter().copied().max().unwrap_or_default();
+        let progress = ramp_cells::ramp_progress(&ramp.dir, &cells);
+        for (ramp_cell, progress) in cells.iter().zip(progress) {
+            let height = low as f32 + (high - low) as f32 * progress;
+            let material = match ramp_cell.kind {
+                RampCellKind::Ramp => ramp_material.clone(),
+                RampCellKind::Top => top_material.clone(),
+                RampCellKind::Edge => edge_material.clone(),
+            };
+            let IVec2 { x, y } = ramp_cell.cell;
+            commands
+                .spawn((
+                    RampComponent,
+                    DisplayInfoOnClick,
+                    Name(
+                        format!(
+                            "Ramp {ramp_ith} going {:?} from level {} to {}: {:?} cell ({x}, {y})",
+                            ramp.dir, ramp.lo, ramp.hi, ramp_cell.kind
+                        )
+                        .into(),
+                    ),
+                    tile_mesh.clone(),
+                    material,
+                    Transform::from_xyz(
+                        (y as f32 + 0.5) * MAP_SCALE_FACTOR,
+                        terrain_top(height) + RAMP_TILE_THICKNESS * 0.5 * MAP_SCALE_FACTOR,
+                        (x as f32 + 0.5) * MAP_SCALE_FACTOR,
+                    ),
+                ))
+                .observe(update_info_on_click);
+        }
+    }
+}
 
-        // high
-        let left_hi_x = ramp.left_hi.x * MAP_SCALE_FACTOR;
-        let left_hi_y = ramp.left_hi.y * MAP_SCALE_FACTOR;
-        let right_hi_x = ramp.right_hi.x * MAP_SCALE_FACTOR;
-        let right_hi_y = ramp.right_hi.y * MAP_SCALE_FACTOR;
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-        // Find the height position in the t3_height_map_res xy vector
-        // I guess these two should be the same since they are "lo"/"hi"?
-        // low
-        let left_lo_target_vec_pos =
-            ramp.left_lo.y as usize * t3_height_map_res.width as usize + ramp.left_lo.x as usize;
-        let right_lo_target_vec_pos =
-            ramp.right_lo.y as usize * t3_height_map_res.width as usize + ramp.right_lo.x as usize;
-        // high
-        let left_hi_target_vec_pos =
-            ramp.left_hi.y as usize * t3_height_map_res.width as usize + ramp.left_hi.x as usize;
-        let right_hi_target_vec_pos =
-            ramp.right_hi.y as usize * t3_height_map_res.width as usize + ramp.right_hi.x as usize;
-
-        // Our height calculation is off by a bit somewhere....
-        let left_lo_cell_height =
-            (t3_height_map_res.data[left_lo_target_vec_pos] as f32 * MAP_SCALE_FACTOR - 0.01)
-                * CELL_HEIGHT_MULTIPLIER;
-        let right_lo_cell_height =
-            (t3_height_map_res.data[right_lo_target_vec_pos] as f32 * MAP_SCALE_FACTOR - 0.01)
-                * CELL_HEIGHT_MULTIPLIER;
-        let left_hi_cell_height =
-            (t3_height_map_res.data[left_hi_target_vec_pos] as f32 * MAP_SCALE_FACTOR - 0.01)
-                * CELL_HEIGHT_MULTIPLIER;
-        let right_hi_cell_height =
-            (t3_height_map_res.data[right_hi_target_vec_pos] as f32 * MAP_SCALE_FACTOR - 0.01)
-                * CELL_HEIGHT_MULTIPLIER;
-
-        // Create Vec3 points for each of the 4 corners of the ramp.
-        // Polyline3d points
-        let left_lo: Vec3 = Vec3::new(0., 0., 0.);
-        let right_lo: Vec3 = Vec3::new(left_lo_y - right_lo_y, 0., left_lo_x - right_lo_x);
-
-        let left_hi: Vec3 = Vec3::new(0., 0., 0.);
-        let right_hi: Vec3 = Vec3::new(left_hi_y - right_hi_y, 0., left_hi_x - right_hi_x);
-
-        let left_lo_transform = Transform::from_xyz(left_lo_y, left_lo_cell_height, left_lo_x);
-        let right_lo_transform = Transform::from_xyz(right_lo_y, right_lo_cell_height, right_lo_x);
-
-        let left_hi_transform = Transform::from_xyz(left_hi_y, left_hi_cell_height, left_hi_x);
-        let right_hi_transform = Transform::from_xyz(right_hi_y, right_hi_cell_height, right_hi_x);
-
-        let ramp_mesh = Mesh3d(meshes.add(Cuboid::from_size(Vec3::new(
-            MAP_SCALE_FACTOR,
-            RAMP_HEIGHT * MAP_SCALE_FACTOR,
-            MAP_SCALE_FACTOR,
-        ))));
-        commands
-            .spawn((
-                DisplayInfoOnClick,
-                Name(format!("left_lo: {}", ramp_ith).into()),
-                left_lo_transform,
-                ramp_mesh.clone(),
-                MeshMaterial3d(materials.add(Color::from(palettes::tailwind::RED_600))),
-            ))
-            .observe(update_info_on_click);
-        commands
-            .spawn((
-                DisplayInfoOnClick,
-                Name(format!("right_lo: {}", ramp_ith).into()),
-                right_lo_transform,
-                ramp_mesh.clone(),
-                MeshMaterial3d(materials.add(Color::from(palettes::tailwind::GREEN_600))),
-            ))
-            .observe(update_info_on_click);
-        commands
-            .spawn((
-                DisplayInfoOnClick,
-                Name(format!("left_hi: {}", ramp_ith).into()),
-                left_hi_transform,
-                ramp_mesh.clone(),
-                MeshMaterial3d(materials.add(Color::from(palettes::tailwind::ORANGE_600))),
-            ))
-            .observe(update_info_on_click);
-        commands
-            .spawn((
-                DisplayInfoOnClick,
-                Name(format!("right_hi: {}", ramp_ith).into()),
-                right_hi_transform,
-                ramp_mesh,
-                MeshMaterial3d(materials.add(Color::from(palettes::tailwind::LIME_600))),
-            ))
-            .observe(update_info_on_click);
-        commands
-            .spawn((
-                DisplayInfoOnClick,
-                Name(format!("lo_ramp: {}", ramp_ith).into()),
-                //Mesh3d(meshes.add(Segment3d::new(left_lo, right_lo))),
-                right_lo_transform,
-                Mesh3d(meshes.add(Polyline3d::new([right_lo, left_lo]))),
-                MeshMaterial3d(materials.add(Color::from(palettes::tailwind::RED_600))),
-            ))
-            .observe(update_info_on_click);
-        commands
-            .spawn((
-                DisplayInfoOnClick,
-                Name(format!("hi_ramp: {}", ramp_ith).into()),
-                //Mesh3d(meshes.add(Segment3d::new(left_hi, right_hi))),
-                right_hi_transform,
-                Mesh3d(meshes.add(Polyline3d::new([right_hi, left_hi]))),
-                MeshMaterial3d(materials.add(Color::from(palettes::tailwind::RED_600))),
-            ))
-            .observe(update_info_on_click);
+    #[test]
+    fn it_parses_the_ramp_corners() {
+        let corner = parse_ramp_corner(
+            "u(-1.000000e+00, 0.000000e+00) r(0.000000e+00, 1.000000e+00) c=(5.200000e+01, 2.000000e+01) w=2.000000e+00 h=3.000000e+00",
+        )
+        .unwrap();
+        assert_eq!(corner.center, Vec2::new(52., 20.));
+        assert_eq!((corner.width, corner.height), (2., 3.));
     }
 }

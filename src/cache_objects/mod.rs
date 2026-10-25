@@ -4,6 +4,7 @@ use super::t3_height_map::T3HeightMapResource;
 use crate::MAP_SCALE_FACTOR;
 use crate::MapScene;
 use crate::standard_material_from_gltf_material;
+use crate::swarmy_feathers::{DisplayInfoOnClick, update_info_on_click};
 use crate::t3_height_map::CELL_HEIGHT_MULTIPLIER;
 use bevy::gltf::GltfMaterial;
 use bevy::prelude::*;
@@ -183,6 +184,18 @@ pub struct UnknownObjectPointMaterial;
 #[type_path = "api"]
 pub struct StartLocMaterial;
 
+/// Marks the ObjectUnits, mineral fields, geysers, rocks, etc, to show or hide them from the
+/// View menu.
+#[derive(Component, Default, Reflect, Debug)]
+#[reflect(Component, Default)]
+pub struct ObjectUnitComponent;
+
+/// Marks the ObjectPoints, start locations, no fly zones, etc, to show or hide them from the
+/// View menu.
+#[derive(Component, Default, Reflect, Debug)]
+#[reflect(Component, Default)]
+pub struct ObjectPointComponent;
+
 /// Loads the t3 height map.
 pub fn load_cache_objects(
     mut commands: Commands,
@@ -199,10 +212,17 @@ pub fn load_cache_objects(
     if *loaded {
         return Ok(());
     }
-    // Wait until the scene is loaded
+    // Wait until the scene and its materials are loaded, the objects are only spawned once.
     let Some(gltf) = gltf_assets.get(&map_scene.0) else {
         return Ok(());
     };
+    if !gltf
+        .named_materials
+        .values()
+        .all(|material| gltf_materials.contains(material))
+    {
+        return Ok(());
+    }
 
     let mineral_mesh = Mesh3d(meshes.add(Cuboid::from_size(Vec3::new(
         MAP_SCALE_FACTOR,
@@ -270,7 +290,7 @@ pub fn load_cache_objects(
             DESTRUCTIBLE_ROCKS_HEIGHT * 0.5 * MAP_SCALE_FACTOR,
             MAP_SCALE_FACTOR * x,
         );
-        match unit.unit_kind.as_ref() {
+        let mut spawned = match unit.unit_kind.as_ref() {
             "RichMineralField750" => commands.spawn((
                 RichMineralField750Material,
                 mineral_mesh.clone(),
@@ -335,6 +355,13 @@ pub fn load_cache_objects(
                 ))
             }
         };
+        spawned
+            .insert((
+                ObjectUnitComponent,
+                DisplayInfoOnClick,
+                Name(format!("{}:{}", unit.unit_kind, unit.id).into()),
+            ))
+            .observe(update_info_on_click);
     }
     let unknown_object_mesh = Mesh3d(meshes.add(Cuboid::new(
         UNKNOWN_OBJECT_SIZE * MAP_SCALE_FACTOR,
@@ -395,7 +422,7 @@ pub fn load_cache_objects(
         );
         // TODO: We should use the alpha channel, dunno if we need glsl for that tho because it's
         // being set from blender and exported to gltf.
-        match object_point.kind.as_str() {
+        let mut spawned = match object_point.kind.as_str() {
             "NoFlyZone" => commands.spawn((
                 NoFlyZoneMaterial,
                 cylinder_mesh,
@@ -415,6 +442,13 @@ pub fn load_cache_objects(
                 cylinder_transform,
             )),
         };
+        spawned
+            .insert((
+                ObjectPointComponent,
+                DisplayInfoOnClick,
+                Name(format!("{}:{}", object_point.kind, object_point.name).into()),
+            ))
+            .observe(update_info_on_click);
     }
     *loaded = true;
     Ok(())

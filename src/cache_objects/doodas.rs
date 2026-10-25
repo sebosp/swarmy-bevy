@@ -26,6 +26,8 @@ pub struct UnknownDoodadMaterial;
 // Testing a Dooda.
 pub const SHADOW_PLATFORM_RAMP_SIZE: f32 = 1.0;
 
+/// Spawns the doodads once the scene and its materials are loaded, it runs every frame until
+/// then, the scene is loaded asynchronously.
 pub fn load_object_doodas(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -34,10 +36,22 @@ pub fn load_object_doodas(
     gltf_assets: Res<Assets<Gltf>>,
     gltf_materials: Res<Assets<GltfMaterial>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut loaded: Local<bool>,
 ) {
+    if *loaded {
+        return;
+    }
     let Some(gltf) = gltf_assets.get(&map_scene.0) else {
         return;
     };
+    if !gltf
+        .named_materials
+        .values()
+        .all(|material| gltf_materials.contains(material))
+    {
+        return;
+    }
+    *loaded = true;
     // An example doodad name observed in the Objects file.
     let shadow_platform_ramp_mesh = Mesh3d(meshes.add(Cuboid::new(
         SHADOW_PLATFORM_RAMP_SIZE * MAP_SCALE_FACTOR,

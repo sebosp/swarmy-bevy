@@ -6,10 +6,12 @@ use bevy::feathers::{controls::*, display::label, theme::ThemeBackgroundColor, t
 use bevy::input_focus::tab_navigation::TabGroup;
 use bevy::prelude::*;
 use bevy::ui::Checked;
-use bevy::ui_widgets::{Activate, ValueChange};
+use bevy::ui_widgets::ValueChange;
 
 use crate::SelectedObjectName;
 use crate::cache_objects::doodas::ObjectDoodadComponent;
+use crate::cache_objects::{ObjectPointComponent, ObjectUnitComponent};
+use crate::t3_terrain::RampComponent;
 
 /// Allows a component to be observed for click events and show display information on a text feather.
 #[derive(Component)]
@@ -29,10 +31,11 @@ pub fn init_feathers() -> impl Scene {
             column_gap: px(8),
         }
         TabGroup
-                    ThemeBackgroundColor(tokens::WINDOW_BG)
-        Children[
-            feather_column_1(),
-            feather_column_2(),
+        ThemeBackgroundColor(tokens::WINDOW_BG)
+        Children [
+            @feather_column_1()
+            --
+            @feather_column_2()
         ]
     }
 }
@@ -49,18 +52,16 @@ fn feather_column_1() -> impl Scene {
             min_width: px(200),
         }
         Children [
-            (
-                Node {
-                    display: Display::Flex,
-                    flex_direction: FlexDirection::Row,
-                    align_items: AlignItems::Center,
-                    justify_content: JustifyContent::Start,
-                    column_gap: px(8),
-                }
-                Children [
-                    main_feather_menu(),
-                ]
-            )
+            Node {
+                display: Display::Flex,
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                justify_content: JustifyContent::Start,
+                column_gap: px(8),
+            }
+            Children [
+                @main_feather_menu()
+            ]
         ]
     }
 }
@@ -77,110 +78,117 @@ fn feather_column_2() -> impl Scene {
             min_width: px(200),
         }
         Children [
-            (
-                Node {
-                    display: Display::Flex,
-                    flex_direction: FlexDirection::Row,
-                    align_items: AlignItems::Center,
-                    justify_content: JustifyContent::Start,
-                    column_gap: px(8),
+            Node {
+                display: Display::Flex,
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                justify_content: JustifyContent::Start,
+                column_gap: px(8),
+            }
+            Children [
+                @label("Selection: ")
+                --
+                Text("") ThemedText SelectedObjectName
+                TextFont {
+                    font_size: bevy::prelude::FontSize::Px(14.),
                 }
-                Children [
-                    (label("Selection: ")),
-                    (
-                        Text("") ThemedText SelectedObjectName
-                        TextFont {
-                            font_size: bevy::prelude::FontSize::Px(14.),
-                        }
-                    )
-                ]
-            )
+            ]
         ]
     }
 }
 
 fn main_feather_menu() -> impl Scene {
     bsn! {
-        (
-            @FeathersMenu
+        @FeathersMenu
+        Children [
+            @FeathersMenuButton {
+                @caption: bsn! { Text("View") ThemedText }
+            }
+            AccessibleLabel("View Menu")
+            Node {
+                flex_grow: 1.0,
+            }
+            --
+            @FeathersMenuPopup
+            Node {
+                height: px(10),
+            }
             Children [
-                (
-                    @FeathersMenuButton {
-                        @caption: bsn! { Text("View") ThemedText }
-                    }
-                    AccessibleLabel("View Menu")
-                    Node {
-                        flex_grow: 1.0,
-                    }
-                ),
-                (
-                    @FeathersMenuPopup
-                    Node {
-                        height: px(10),
-                    }
-                    Children [
-                        (
                             @FeathersCheckbox {
-                                @caption: bsn! { Text("Enable ObjectDoodas") ThemedText Checked}
+                                @caption: bsn! { Text("Enable ObjectDoodas") ThemedText }
                             }
                             Checked
                             on(|
                                 value_change: On<ValueChange<bool>>,
                                 commands: Commands,
                                 query: Query<Entity, (With<ObjectDoodadComponent>, Allow<Disabled>)>, | {
-                                handle_view_menu_object_doodas_checkbox(value_change, commands, query)
+                                toggle_entities(value_change, commands, query)
                             })
-                        ),
-                        (
+                            --
                             @FeathersCheckbox {
                                 @caption: bsn! { Text("Enable ObjectUnits") ThemedText }
                             }
-                            on(|_: On<Activate>| {
-                                info!("Enabling ObjectUnits");
+                            Checked
+                            on(|
+                                value_change: On<ValueChange<bool>>,
+                                commands: Commands,
+                                query: Query<Entity, (With<ObjectUnitComponent>, Allow<Disabled>)>, | {
+                                toggle_entities(value_change, commands, query)
                             })
-                        ),
-                        (
+                            --
                             @FeathersCheckbox {
                                 @caption: bsn! { Text("Enable ObjectPoints") ThemedText }
                             }
-                            on(|_: On<Activate>| {
-                                info!("Enabling ObjectPoints");
+                            Checked
+                            on(|
+                                value_change: On<ValueChange<bool>>,
+                                commands: Commands,
+                                query: Query<Entity, (With<ObjectPointComponent>, Allow<Disabled>)>, | {
+                                toggle_entities(value_change, commands, query)
                             })
-                        ),
-                        @FeathersMenuDivider,
-                        (
-                            @FeathersMenuItem {
-                                @caption: bsn! { Text("Second section") ThemedText }
+                            --
+                            @FeathersCheckbox {
+                                @caption: bsn! { Text("Enable Ramps") ThemedText }
                             }
-                        )
-                    ]
-                )
+                            Checked
+                            on(|
+                                value_change: On<ValueChange<bool>>,
+                                commands: Commands,
+                                query: Query<Entity, (With<RampComponent>, Allow<Disabled>)>, | {
+                                toggle_entities(value_change, commands, query)
+                            })
+                --
+                @FeathersMenuDivider
+                --
+                @FeathersMenuItem {
+                    @caption: bsn! { Text("Second section") ThemedText }
+                }
             ]
-        )
+        ]
     }
 }
 
-pub fn handle_view_menu_object_doodas_checkbox(
+/// Shows or hides the entities of a View menu checkbox, the hidden entities are disabled.
+pub fn toggle_entities<F: bevy::ecs::query::QueryFilter>(
     value_change: On<ValueChange<bool>>,
     mut commands: Commands,
-    query: Query<Entity, (With<ObjectDoodadComponent>, Allow<Disabled>)>,
+    query: Query<Entity, F>,
 ) {
     if value_change.value {
         commands.entity(value_change.source).insert(Checked);
         for entity in query.iter() {
-            info!("True: Working on entity: {}", entity);
             commands.entity(entity).remove::<Disabled>();
         }
     } else {
         commands.entity(value_change.source).remove::<Checked>();
         for entity in query.iter() {
-            info!("False: Working on entity: {}", entity);
             commands.entity(entity).insert(Disabled);
         }
     }
 }
+
 pub fn update_info_on_click(
-    click: On<Pointer<Click>>,
+    click: On<PointerClick>,
     display_info_query: Query<(&Name, Entity), With<DisplayInfoOnClick>>,
     mut selected_object: Single<&mut Text, With<SelectedObjectName>>,
 ) {

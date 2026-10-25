@@ -1,14 +1,13 @@
 //! The main Map Bevy Plugin
 use bevy::prelude::*;
-use s2protocol::cache_handles::DOCUMENT_HEADER_FILE_NAME;
-use s2protocol::cache_handles::MAP_INFO_FILE_NAME;
-use s2protocol::cache_handles::T3_HEIGHT_MAP_FILE_NAME;
 
 use crate::cache_objects;
 use crate::cache_objects::PlacedObjectsResource;
 use crate::cli::CliParams;
+use crate::replay::ReplayData;
 use crate::swarmy_feathers;
 use crate::t3_height_map;
+use crate::t3_height_map::FLAT_TERRAIN_LEVEL;
 use crate::t3_height_map::MapDimension;
 use crate::t3_height_map::T3HeightMapResource;
 use crate::t3_terrain;
@@ -22,16 +21,38 @@ impl Plugin for MapPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(PreStartup, load_cache_depot_map_resources);
         app.add_systems(Startup, MapPlugin::scene.spawn());
-        app.add_systems(Startup, t3_height_map::load_t3_height_map);
-        app.add_systems(Startup, cache_objects::doodas::load_object_doodas);
-        app.add_systems(Update, cache_objects::load_cache_objects);
-        app.add_systems(Update, t3_terrain::load_t3_terrain);
+        // The map resources are missing when the map cache is not downloaded, the error is shown
+        // instead of the map.
+        app.add_systems(Startup, t3_height_map::load_t3_height_map.run_if(has_map));
+        app.add_systems(
+            Update,
+            (
+                cache_objects::doodas::load_object_doodas,
+                cache_objects::load_cache_objects,
+            )
+                .run_if(has_map)
+                .run_if(resource_exists::<PlacedObjectsResource>),
+        );
+        app.add_systems(
+            Update,
+            t3_terrain::load_t3_terrain
+                .run_if(has_map)
+                .run_if(resource_exists::<T3TerrainResource>),
+        );
         app.add_systems(Update, utils::update_gizmo_config);
     }
 }
+/// Whether the map cache was loaded.
+fn has_map(
+    height_map: Option<Res<T3HeightMapResource>>,
+    map_info: Option<Res<MapInfoResource>>,
+) -> bool {
+    height_map.is_some() && map_info.is_some()
+}
+
 impl MapPlugin {
     fn scene() -> impl SceneList {
-        bsn_list![swarmy_feathers::init_feathers()]
+        bsn_list! { @swarmy_feathers::init_feathers() }
     }
 }
 
@@ -127,7 +148,11 @@ impl From<s2protocol::cache_handles::document_header::DocumentHeader> for Docume
 }
 
 /// Attempts to load the available resources from the downloaded caches.
-pub fn load_cache_depot_map_resources(mut commands: Commands, cli_params: Res<CliParams>) {
+pub fn load_cache_depot_map_resources(
+    mut commands: Commands,
+    cli_params: Res<CliParams>,
+    replay: Option<Res<ReplayData>>,
+) {
     let mut cache_builder =
         s2protocol::cache_handles::CacheCollection::new(cli_params.path.clone());
     let cache_ids = cli_params
@@ -139,27 +164,18 @@ pub fn load_cache_depot_map_resources(mut commands: Commands, cli_params: Res<Cl
     match cache_builder.build_map_cache(&cache_ids) {
         Ok(map_cache) => {
             let t3_height_map = map_cache.t3_height_map;
-            let max_map_dim = t3_height_map.width.max(t3_height_map.height);
-            let mut cell_x_y_data: Vec<u8> = Vec::with_capacity(max_map_dim * max_map_dim);
-            for _ in 0..(max_map_dim * max_map_dim) {
-                cell_x_y_data.push(0);
-            }
-            for (idx, cell_height) in t3_height_map.data.iter().enumerate() {
-                let x = usize::try_from(
-                    (t3_height_map.width as i32 - idx as i32).abs() % t3_height_map.width as i32,
-                )
-                .unwrap();
-                let y = usize::try_from(
-                    (t3_height_map.width as i32 - idx as i32).abs() / t3_height_map.width as i32,
-                )
-                .unwrap();
-                let target_vec_pos = y as usize * t3_height_map.width as usize + x as usize;
-                cell_x_y_data[target_vec_pos] = *cell_height;
-            }
+            // The data is row by row from the bottom of the map, as the objects positions.
+            // A replay is shown on the flattened terrain, the colors keep the levels.
+            let data = if replay.is_some() {
+                vec![FLAT_TERRAIN_LEVEL as u8; t3_height_map.data.len()]
+            } else {
+                t3_height_map.data.clone()
+            };
             let t3_height_map_res = T3HeightMapResource {
-                data: cell_x_y_data,
-                width: t3_height_map.width as usize,
-                height: t3_height_map.height as usize,
+                data,
+                levels: t3_height_map.data,
+                width: t3_height_map.width,
+                height: t3_height_map.height,
             };
             commands.insert_resource(t3_height_map_res);
             let map_info_res = MapInfoResource::from(map_cache.map_info);
@@ -186,8 +202,12 @@ pub fn load_cache_depot_map_resources(mut commands: Commands, cli_params: Res<Cl
 
             desc_lines.push(curr_str.replace("<n/>", "\n"));
             document_header.description_long = desc_lines.join("\n");
-            if let Ok(t3_terrain_res) = T3TerrainResource::try_from(map_cache.t3_terrain) {
-                commands.insert_resource(t3_terrain_res);
+            match T3TerrainResource::try_from(map_cache.t3_terrain) {
+                Ok(t3_terrain_res) => {
+                    tracing::info!("{} ramps", t3_terrain_res.ramp_list.len());
+                    commands.insert_resource(t3_terrain_res);
+                }
+                Err(err) => tracing::warn!("Unable to read the ramps: {err:?}"),
             }
             let document_header_res = DocumentHeaderResource::from(document_header);
             commands.insert_resource(document_header_res);

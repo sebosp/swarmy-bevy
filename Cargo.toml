@@ -4,23 +4,25 @@ authors = ["Seb Ospina <kraige@gmail.com>"]
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
+default-run = "swarmy-bevy"
 
 [dependencies]
-bevy = { version = "0.19.1", features = [
+bevy = { version = "0.20.0", features = [
     "free_camera",
     "jpeg",
     "dds",
     "tga",
     "bevy_feathers",
 ] }
-bevy_skein = "0.6.0"
+bevy_skein = "0.7.0-rc.1"
 # Compile low-severity logs out of native builds for performance.
 log = { version = "0.4", features = [
     "max_level_debug",
     "release_max_level_warn",
 ] }
-s2protocol = { version = "3.5.9", default-features = false, features = [
+s2protocol = { version = "3.6.0", default-features = false, features = [
     "tracing_info_level",
+    "textures",
 ] }
 tracing = { version = "0.1", features = [
     "max_level_debug",
@@ -133,3 +135,7 @@ codegen-units = 4
 
 [profile.ci.package."*"]
 opt-level = 0
+
+# The local s2protocol-rs checkout, with the ramp attributes, the minimap and the textures.
+[patch.crates-io]
+s2protocol = { path = "../s2protocol-rs" }
