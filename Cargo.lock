@@ -5385,6 +5385,8 @@ dependencies = [
 [[package]]
 name = "s2protocol"
 version = "3.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9006be4ed8fdc37d07076035e64ebb5a237baba7fbcbe025e210d05bb95c934b"
 dependencies = [
  "chrono",
  "colored",

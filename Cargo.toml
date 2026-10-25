@@ -135,7 +135,3 @@ codegen-units = 4
 
 [profile.ci.package."*"]
 opt-level = 0
-
-# The local s2protocol-rs checkout, with the ramp attributes, the minimap and the textures.
-[patch.crates-io]
-s2protocol = { path = "../s2protocol-rs" }

@@ -58,8 +58,8 @@ a window that is not visible, `WAYLAND_DISPLAY= ` runs it with XWayland.
 cargo run -- --path ~/SC2Replays/swarmy --ids <cache ids> --screenshot /tmp/map.png
 ```
 
-swarmy-bevy uses the local s2protocol-rs checkout (`[patch.crates-io]` in Cargo.toml), which
-reads the ramp directions and levels from t3Terrain.xml and embeds the button textures.
+swarmy-bevy uses s2protocol 3.6.0 from crates.io, which reads the ramp directions and levels from
+t3Terrain.xml and embeds the button textures (the `textures` feature).
 
 swarmy-bevy uses Bevy 0.20 and bevy_skein 0.7 (a release candidate, the first version for Bevy
 0.20).
@@ -106,8 +106,7 @@ cargo run --bin tauri-sidecar -- ../swarmy/assets x86_64-pc-windows-gnu
 `.github/workflows/sidecar.yaml` builds the sidecar for Linux (x86_64, aarch64), Windows (x86_64)
 and macOS (Apple Silicon, Intel), named `swarmy-bevy-<target triple>[.exe]`. Pushing a `v*` tag
 creates a GitHub release with them, swarmy's `scripts/download-sidecars.sh` downloads the one of
-the platform. It checks out s2protocol-rs next to swarmy-bevy for the `[patch.crates-io]`, at the
-`S2PROTOCOL_REF` branch of the workflow. The older `release.yaml` and `ci.yaml` are the bevy_cli
+the platform. The older `release.yaml` and `ci.yaml` are the bevy_cli
 templates, they are not set up for this repository yet.
 
 `build.rs` provides the target triple. It cannot copy the binary itself because build scripts run
