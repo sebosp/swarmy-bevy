@@ -268,9 +268,8 @@ pub fn load_cache_objects(
             );
             continue;
         };
-        let unit_material = MeshMaterial3d(
-            materials.add(standard_material_from_gltf_material(unit_gltf_material)),
-        );
+        let unit_material =
+            MeshMaterial3d(materials.add(standard_material_from_gltf_material(unit_gltf_material)));
         let x = unit_pos[0];
         let y = unit_pos[1];
         let target_vec_pos = y as usize * t3_height_map_res.width + x as usize;
@@ -405,9 +404,8 @@ pub fn load_cache_objects(
             );
             continue;
         };
-        let object_point_material = MeshMaterial3d(
-            materials.add(standard_material_from_gltf_material(unit_gltf_material)),
-        );
+        let object_point_material =
+            MeshMaterial3d(materials.add(standard_material_from_gltf_material(unit_gltf_material)));
         let pathing_radius_soft = object_point.pathing_radius_soft;
         let _pathing_radius_hard = object_point.pathing_radius_hard;
         let torus_mesh = Mesh3d(meshes.add(Torus::new(0.2, 0.25)));

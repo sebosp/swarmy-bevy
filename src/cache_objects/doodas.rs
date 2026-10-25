@@ -94,9 +94,8 @@ pub fn load_object_doodas(
             tracing::warn!("Unhandled Skein GLTF gltf_material Doodad: {}", doodad.kind);
             continue;
         };
-        let dooda_material = MeshMaterial3d(
-            materials.add(standard_material_from_gltf_material(unit_gltf_material)),
-        );
+        let dooda_material =
+            MeshMaterial3d(materials.add(standard_material_from_gltf_material(unit_gltf_material)));
 
         let shadow_platform_ramp_transform = Transform::from_xyz(
             MAP_SCALE_FACTOR * y,
