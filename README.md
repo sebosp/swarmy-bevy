@@ -4,7 +4,13 @@
 
 MapInfo, T3 Height Map, Objects (Units such as XelNagaTowers, Doodas, UnitPoints such as StartLocations)
 
-![Bevy window](https://github.com/sebosp/swarby-bevy/blob/main/assets/images/swarmy-bevy-20260624.gif)
+![A map in swarmy-bevy: the terrain levels, ramps, resources and start locations](docs/map.png)
+
+![A replay in swarmy-bevy: the units born and lost of each player over time](docs/replay.png)
+
+The replay bars are per 4x4 cells and player, the units born in the color of the player and the
+units lost in a darker shade next to them. swarmy's
+[walkthrough](https://github.com/sebosp/swarmy#walkthrough) shows it opened from a replay.
 
 The replays are managed via [swarmy](https://github.com/sebosp/swarmy)
 Once a replay path is defined, the caches can be downloaded, the maps listed and the preview from this repo is triggered.
