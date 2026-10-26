@@ -18,12 +18,17 @@ Once a replay path is defined, the caches can be downloaded, the maps listed and
 ### Replays
 
 `--replay <file.SC2Replay>` shows the replay on its map, the replay has the cache handles of the map
-so only `--path` (the cache path) is needed. swarmy runs it from the Replay List and Replay Detail.
+so only `--map-caches` (the map caches directory) is needed. swarmy runs it from the Replay List and
+Replay Detail. Without a map or a replay, swarmy-bevy shows its help.
 
-- The terrain is flattened, keeping the colors of its levels.
-- Every 4x4 map cells have a green bar for the units born (UnitBorn and UnitInit) and a red bar for
-  the units died up to the current time, only the units that cost resources (no Larva, Broodlings,
-  etc). The bars are scaled by the cell with the most units in the game, so they grow over time.
+- The terrain is flattened and drawn in grays, darker the lower.
+- Every 4x4 map cells have a bar per player, in the color of the player, for the units died or
+  born (UnitBorn and UnitInit) up to the current time, a dropdown chooses, the units died by
+  default. Only the units that cost resources count (no Larva, Broodlings, etc). The bars are
+  scaled by the cell with the most units in the game, so they grow over time.
+- The units panel lists the unit types died or born so far with their count, clicking one shows
+  only its bars, clicking it again shows all of them. Clicking a bar shows its unit types.
+- The map title is at the top.
 - The time moves in steps of 30 seconds with the `<` `>` buttons or the Left/Right arrows, Home/End
   for the start and the end of the game. `--replay-seconds <seconds>` starts at a given time.
 - The players panel has each player in their color, the clan tag unescaped (`<TAG> Player`), the
@@ -35,7 +40,7 @@ so only `--path` (the cache path) is needed. swarmy runs it from the Replay List
 The button textures are embedded by s2protocol (the `textures` feature).
 
 ```bash
-cargo run -- --path ~/SC2Replays/swarmy --replay "Celestial Enclave LE.SC2Replay" --replay-seconds 600
+cargo run -- --map-caches ~/SC2Replays/swarmy --replay "Celestial Enclave LE.SC2Replay" --replay-seconds 600
 ```
 
 ### Ramps
@@ -61,7 +66,7 @@ rendering, i.e. after changing how the assets are loaded. On Wayland the composi
 a window that is not visible, `WAYLAND_DISPLAY= ` runs it with XWayland.
 
 ```bash
-cargo run -- --path ~/SC2Replays/swarmy --ids <cache ids> --screenshot /tmp/map.png
+cargo run -- --map-caches ~/SC2Replays/swarmy --map-cache-ids <cache ids> --screenshot /tmp/map.png
 ```
 
 swarmy-bevy uses s2protocol 3.6.0 from crates.io, which reads the ramp directions and levels from

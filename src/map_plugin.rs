@@ -40,7 +40,42 @@ impl Plugin for MapPlugin {
                 .run_if(resource_exists::<T3TerrainResource>),
         );
         app.add_systems(Update, utils::update_gizmo_config);
+        app.add_systems(Startup, show_map_title);
     }
+}
+
+/// The title of the map, at the top of the window under the selection: the one of the replay, or
+/// the name in the map document header.
+fn show_map_title(
+    mut commands: Commands,
+    replay: Option<Res<ReplayData>>,
+    document_header: Option<Res<DocumentHeaderResource>>,
+) {
+    let title = replay
+        .map(|replay| replay.map_title.clone())
+        .filter(|title| !title.is_empty())
+        .or_else(|| document_header.map(|header| header.name.clone()))
+        .unwrap_or_default();
+    if title.is_empty() {
+        return;
+    }
+    commands
+        .spawn(Node {
+            position_type: PositionType::Absolute,
+            top: px(32),
+            width: percent(100),
+            justify_content: JustifyContent::Center,
+            ..default()
+        })
+        .with_child((
+            Text::new(title),
+            TextFont {
+                font_size: bevy::prelude::FontSize::Px(22.),
+                ..default()
+            },
+            TextColor(Color::WHITE),
+            Pickable::IGNORE,
+        ));
 }
 /// Whether the map cache was loaded.
 fn has_map(

@@ -345,34 +345,83 @@ impl ReplayData {
         steps
     }
 
-    /// The units born and died of each player in each aggregated cell up to the time, by cell and
-    /// player index.
-    pub fn cell_counts(&self, until_seconds: u32) -> BTreeMap<CellPlayer, (u32, u32)> {
-        let mut counts: BTreeMap<CellPlayer, (u32, u32)> = BTreeMap::new();
-        for event in self
-            .events
+    /// The events of a kind up to the time, of one unit type or all of them.
+    fn events_until<'a>(
+        &'a self,
+        until_seconds: u32,
+        kind: CellEventKind,
+        unit: Option<&'a str>,
+    ) -> impl Iterator<Item = &'a CellEvent> {
+        self.events
             .iter()
-            .take_while(|event| event.seconds <= until_seconds)
-        {
-            let count = counts
+            .take_while(move |event| event.seconds <= until_seconds)
+            .filter(move |event| event.kind == kind)
+            .filter(move |event| unit.is_none_or(|unit| event.unit == unit))
+    }
+
+    /// The units born or died of each player in each aggregated cell up to the time, by cell and
+    /// player index, of one unit type or all of them.
+    pub fn cell_counts(
+        &self,
+        until_seconds: u32,
+        kind: CellEventKind,
+        unit: Option<&str>,
+    ) -> BTreeMap<CellPlayer, u32> {
+        let mut counts: BTreeMap<CellPlayer, u32> = BTreeMap::new();
+        for event in self.events_until(until_seconds, kind, unit) {
+            *counts
                 .entry(((event.cell.x, event.cell.y), event.player))
-                .or_default();
-            match event.kind {
-                CellEventKind::Born => count.0 += 1,
-                CellEventKind::Died => count.1 += 1,
-            }
+                .or_default() += 1;
         }
         counts
     }
 
+    /// The cells and players with units born or died during the game, they have a bar.
+    pub fn cell_players(&self) -> Vec<CellPlayer> {
+        let mut cells: Vec<CellPlayer> = self
+            .events
+            .iter()
+            .map(|event| ((event.cell.x, event.cell.y), event.player))
+            .collect();
+        cells.sort();
+        cells.dedup();
+        cells
+    }
+
     /// The most units born or died of a player in a cell during the game, the bars are scaled by
     /// it so that their size can be compared over time.
-    pub fn max_cell_count(&self) -> u32 {
-        self.cell_counts(self.duration_seconds)
-            .values()
-            .map(|(born, died)| *born.max(died))
+    pub fn max_cell_count(&self, kind: CellEventKind, unit: Option<&str>) -> u32 {
+        self.cell_counts(self.duration_seconds, kind, unit)
+            .into_values()
             .max()
             .unwrap_or_default()
+    }
+
+    /// The unit types born or died up to the time, the most frequent first, of a cell and player
+    /// or of the whole map.
+    pub fn unit_counts(
+        &self,
+        until_seconds: u32,
+        kind: CellEventKind,
+        cell_player: Option<CellPlayer>,
+    ) -> Vec<(String, u32)> {
+        let mut counts: HashMap<&str, u32> = HashMap::new();
+        for event in self
+            .events_until(until_seconds, kind, None)
+            .filter(|event| {
+                cell_player.is_none_or(|(cell, player)| {
+                    (event.cell.x, event.cell.y) == cell && event.player == player
+                })
+            })
+        {
+            *counts.entry(event.unit.as_str()).or_default() += 1;
+        }
+        let mut counts: Vec<(String, u32)> = counts
+            .into_iter()
+            .map(|(unit, count)| (unit.to_string(), count))
+            .collect();
+        counts.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        counts
     }
 
     /// The upgrades of the player finished up to the time.
@@ -483,17 +532,22 @@ mod tests {
         assert!(data.events.windows(2).all(|w| w[0].seconds <= w[1].seconds));
         // The counts grow over time.
         let half: u32 = data
-            .cell_counts(data.duration_seconds / 2)
+            .cell_counts(data.duration_seconds / 2, CellEventKind::Born, None)
             .values()
-            .map(|c| c.0)
             .sum();
         let end: u32 = data
-            .cell_counts(data.duration_seconds)
+            .cell_counts(data.duration_seconds, CellEventKind::Born, None)
             .values()
-            .map(|c| c.0)
             .sum();
         assert!(half <= end);
         assert_eq!(end as usize, born);
+        // The counts of the unit types add up to the counts of the cells.
+        let units: u32 = data
+            .unit_counts(data.duration_seconds, CellEventKind::Born, None)
+            .iter()
+            .map(|(_, count)| count)
+            .sum();
+        assert_eq!(units, end);
         assert_eq!(data.time_steps().last(), Some(&data.duration_seconds));
     }
 }

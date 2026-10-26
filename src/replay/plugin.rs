@@ -1,11 +1,11 @@
-//! Draws the [`ReplayData`]: per aggregated cell and player a bar for the units born, in the color
-//! of the player, and a darker bar for the units lost, up to the current time, on top of the
-//! flattened terrain, drawn in grays so that its levels do not look like the players. The time
-//! moves with the < > buttons or the Left/Right arrows (Home/End for the start/end of the game).
-//! A panel shows the players with their color, result, upgrades and most effective unit and
-//! ability.
+//! Draws the [`ReplayData`]: per aggregated cell and player a bar, in the color of the player, for
+//! the units died or born up to the current time (a dropdown chooses, the units died by default),
+//! of every unit type or of the one chosen in the units panel, on top of the flattened terrain,
+//! drawn in grays so that its levels do not look like the players. The time moves with the < >
+//! buttons or the Left/Right arrows (Home/End for the start/end of the game). A panel shows the
+//! players with their color, result, upgrades and most effective unit and ability.
 
-use super::{AGGREGATE_CELLS, ReplayData, game_time};
+use super::{AGGREGATE_CELLS, CellEventKind, ReplayData, game_time};
 use crate::MAP_SCALE_FACTOR;
 use crate::SelectedObjectName;
 use crate::swarmy_feathers::{DisplayInfoOnClick, update_info_on_click};
@@ -23,23 +23,20 @@ use std::collections::HashMap;
 /// The tallest bar, for the cell with the most units born or died in the game, in world units.
 pub const MAX_BAR_HEIGHT: f32 = 4.;
 
-/// The width of a bar in map cells, the born and lost bars of a player are side by side.
-const BAR_WIDTH_CELLS: f32 = AGGREGATE_CELLS as f32 * 0.4;
+/// The width of a bar in map cells.
+const BAR_WIDTH_CELLS: f32 = AGGREGATE_CELLS as f32 * 0.8;
 
 /// The depth of the bars of all the players of a cell in map cells, the players are one after
 /// the other.
 const BAR_DEPTH_CELLS: f32 = AGGREGATE_CELLS as f32 * 0.8;
 
-/// The color of the units born of a player, its color in the game.
-pub fn born_color(color: [u8; 4]) -> Color {
+/// The unit types shown in the units panel, the most frequent ones.
+const MAX_PANEL_UNITS: usize = 24;
+
+/// The color of the bars of a player, its color in the game.
+pub fn player_color(color: [u8; 4]) -> Color {
     let [r, g, b, _] = color;
     Color::srgb_u8(r, g, b)
-}
-
-/// The color of the units lost of a player, its color darker, so that the bars of a player have
-/// the same hue.
-pub fn lost_color(color: [u8; 4]) -> Color {
-    born_color(color).mix(&Color::BLACK, 0.6)
 }
 
 /// The size of the upgrade and unit icons in the players panel.
@@ -50,14 +47,16 @@ pub struct ReplayPlugin;
 impl Plugin for ReplayPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<IconImages>()
+            .init_resource::<BarSelection>()
             .add_systems(Startup, (init_replay_time, spawn_bars))
             .add_systems(Startup, replay_panel.spawn())
             .add_systems(
                 Update,
                 (
                     step_time_with_keys,
-                    (update_bars, update_time_text, update_players_panel)
-                        .run_if(resource_changed::<ReplayTime>),
+                    (update_time_text, update_players_panel).run_if(resource_changed::<ReplayTime>),
+                    // They check whether the time or the selection changed.
+                    (update_bars, update_units_panel, update_bar_kind_text),
                 ),
             );
     }
@@ -85,14 +84,46 @@ impl ReplayTime {
 #[derive(Resource, Debug, Default)]
 pub struct ReplayStartSeconds(pub Option<u32>);
 
-/// A bar of a player in an aggregated cell.
+/// What the bars count: the units died or born, of every unit type or of one.
+#[derive(Resource, Debug, Clone, PartialEq, Eq)]
+pub struct BarSelection {
+    pub kind: CellEventKind,
+    pub unit: Option<String>,
+}
+
+impl Default for BarSelection {
+    fn default() -> Self {
+        Self {
+            kind: CellEventKind::Died,
+            unit: None,
+        }
+    }
+}
+
+impl BarSelection {
+    fn kind_label(&self) -> &'static str {
+        match self.kind {
+            CellEventKind::Died => "Units died",
+            CellEventKind::Born => "Units born",
+        }
+    }
+}
+
+/// The bar of a player in an aggregated cell.
 #[derive(Component, Debug)]
 pub struct CellBar {
     pub cell: (u32, u32),
     /// The index of the player in [`ReplayData::players`].
     pub player: usize,
-    pub born: bool,
 }
+
+/// The caption of the dropdown of the units died or born.
+#[derive(Component, Default, Clone)]
+struct BarKindText;
+
+/// The unit types of the bars, rebuilt when the time or the selection changes.
+#[derive(Component, Default, Clone)]
+struct UnitsPanel;
 
 /// The current time label.
 #[derive(Component, Default, Clone)]
@@ -156,7 +187,7 @@ fn cell_center(cell: (u32, u32)) -> (f32, f32) {
     (map_y * MAP_SCALE_FACTOR, map_x * MAP_SCALE_FACTOR)
 }
 
-/// Spawns the bars of every player in every cell with units born or died during the game, hidden
+/// Spawns the bar of every player in every cell with units born or died during the game, hidden
 /// until they have a count.
 fn spawn_bars(
     mut commands: Commands,
@@ -172,69 +203,59 @@ fn spawn_bars(
         .players
         .iter()
         .map(|player| {
-            let born = born_color(player.color);
-            let born = materials.add(StandardMaterial {
-                base_color: born,
-                // A little glow with the bloom, the lost bars stay dim.
-                emissive: born.to_linear() * 0.6,
+            let color = player_color(player.color);
+            MeshMaterial3d(materials.add(StandardMaterial {
+                base_color: color,
+                // A little glow with the bloom.
+                emissive: color.to_linear() * 0.6,
                 ..default()
-            });
-            let lost = materials.add(StandardMaterial {
-                base_color: lost_color(player.color),
-                perceptual_roughness: 1.,
-                ..default()
-            });
-            (MeshMaterial3d(born), MeshMaterial3d(lost))
+            }))
         })
         .collect();
-    for (cell, player) in replay.cell_counts(replay.duration_seconds).into_keys() {
+    for (cell, player) in replay.cell_players() {
         let (world_x, world_z) = cell_center(cell);
         // The players of a cell one after the other, centered on the cell.
         let player_offset = (player as f32 - (players - 1) as f32 / 2.) * depth;
-        let Some((born_material, lost_material)) = player_materials.get(player) else {
+        let Some(material) = player_materials.get(player) else {
             continue;
         };
-        for born in [true, false] {
-            // The born bar is to the left of the lost bar.
-            let offset = if born { -0.5 } else { 0.5 } * width;
-            commands
-                .spawn((
-                    CellBar { cell, player, born },
-                    Name::new(""),
-                    DisplayInfoOnClick,
-                    mesh.clone(),
-                    if born {
-                        born_material.clone()
-                    } else {
-                        lost_material.clone()
-                    },
-                    Transform::from_xyz(
-                        world_x + offset,
-                        terrain_top(FLAT_TERRAIN_LEVEL),
-                        world_z + player_offset,
-                    ),
-                    Visibility::Hidden,
-                ))
-                .observe(update_info_on_click);
-        }
+        commands
+            .spawn((
+                CellBar { cell, player },
+                Name::new(""),
+                DisplayInfoOnClick,
+                mesh.clone(),
+                material.clone(),
+                Transform::from_xyz(
+                    world_x,
+                    terrain_top(FLAT_TERRAIN_LEVEL),
+                    world_z + player_offset,
+                ),
+                Visibility::Hidden,
+            ))
+            .observe(update_info_on_click);
     }
 }
 
 fn update_bars(
     replay: Res<ReplayData>,
     time: Res<ReplayTime>,
+    selection: Res<BarSelection>,
     mut bars: Query<(&CellBar, &mut Transform, &mut Visibility, &mut Name)>,
 ) {
+    if !time.is_changed() && !selection.is_changed() {
+        return;
+    }
     let seconds = time.seconds();
-    let counts = replay.cell_counts(seconds);
-    let max_count = replay.max_cell_count().max(1) as f32;
+    let unit = selection.unit.as_deref();
+    let counts = replay.cell_counts(seconds, selection.kind, unit);
+    let max_count = replay.max_cell_count(selection.kind, unit).max(1) as f32;
     let ground = terrain_top(FLAT_TERRAIN_LEVEL);
     for (bar, mut transform, mut visibility, mut name) in &mut bars {
-        let (born, died) = counts
+        let count = counts
             .get(&(bar.cell, bar.player))
             .copied()
             .unwrap_or_default();
-        let count = if bar.born { born } else { died };
         if count == 0 {
             *visibility = Visibility::Hidden;
             continue;
@@ -249,13 +270,136 @@ fn update_bars(
             .get(bar.player)
             .map(|player| player.name.as_str())
             .unwrap_or_default();
+        // Clicking the bar shows its unit types in the selection.
+        let units = replay
+            .unit_counts(seconds, selection.kind, Some((bar.cell, bar.player)))
+            .into_iter()
+            .filter(|(name, _)| unit.is_none_or(|unit| unit == name))
+            .take(6)
+            .map(|(name, count)| format!("{count} {name}"))
+            .collect::<Vec<_>>()
+            .join(", ");
         name.set(format!(
-            "Cells ({x}, {y}) to ({}, {}) at {}: {player} {born} units born, {died} lost",
+            "Cells ({x}, {y}) to ({}, {}) at {}: {player}, {} {}: {units}",
             x + AGGREGATE_CELLS - 1,
             y + AGGREGATE_CELLS - 1,
             game_time(seconds),
+            count,
+            selection.kind_label().to_lowercase(),
         ));
     }
+}
+
+fn update_bar_kind_text(
+    selection: Res<BarSelection>,
+    mut text: Single<&mut Text, With<BarKindText>>,
+) {
+    if !selection.is_changed() {
+        return;
+    }
+    text.0 = selection.kind_label().to_string();
+}
+
+fn show_units_died(_activate: On<Activate>, mut selection: ResMut<BarSelection>) {
+    selection.kind = CellEventKind::Died;
+}
+
+fn show_units_born(_activate: On<Activate>, mut selection: ResMut<BarSelection>) {
+    selection.kind = CellEventKind::Born;
+}
+
+/// The unit type of a units panel entry, clicking it shows only its bars, clicking it again shows
+/// every unit type.
+#[derive(Component, Debug, Clone)]
+struct UnitFilterButton(Option<String>);
+
+fn toggle_unit_filter(
+    click: On<PointerClick>,
+    buttons: Query<&UnitFilterButton>,
+    parents: Query<&ChildOf>,
+    mut selection: ResMut<BarSelection>,
+) {
+    // The click can be on the icon or the label of the entry.
+    let Some(UnitFilterButton(unit)) = std::iter::once(click.entity)
+        .chain(parents.iter_ancestors(click.entity))
+        .find_map(|entity| buttons.get(entity).ok())
+    else {
+        return;
+    };
+    selection.unit = if selection.unit == *unit {
+        None
+    } else {
+        unit.clone()
+    };
+}
+
+/// Rebuilds the unit types of the bars up to the time, with their count, the selected one framed.
+fn update_units_panel(
+    mut commands: Commands,
+    replay: Res<ReplayData>,
+    time: Res<ReplayTime>,
+    selection: Res<BarSelection>,
+    panel: Single<Entity, With<UnitsPanel>>,
+    mut icons: ResMut<IconImages>,
+    mut images: ResMut<Assets<Image>>,
+) {
+    if !time.is_changed() && !selection.is_changed() {
+        return;
+    }
+    let units: Vec<_> = replay
+        .unit_counts(time.seconds(), selection.kind, None)
+        .into_iter()
+        .take(MAX_PANEL_UNITS)
+        .map(|(unit, count)| {
+            let image = replay
+                .unit_icons
+                .get(&unit)
+                .and_then(|icon| icons.get(icon, &mut images));
+            (image, unit, count)
+        })
+        .collect();
+    commands.entity(*panel).despawn_related::<Children>();
+    commands.entity(*panel).with_children(|panel| {
+        let all_color = if selection.unit.is_none() {
+            Color::WHITE
+        } else {
+            Color::from(palettes::tailwind::GRAY_400)
+        };
+        panel
+            .spawn((
+                Node {
+                    padding: UiRect::axes(px(6), px(4)),
+                    border: UiRect::all(px(1)),
+                    ..default()
+                },
+                BorderColor::all(all_color),
+                UnitFilterButton(None),
+                Name::new("Show every unit type"),
+            ))
+            .observe(show_name_on_hover)
+            .observe(toggle_unit_filter)
+            .with_child((small_text("All", all_color), Pickable::IGNORE));
+        for (image, unit, count) in units {
+            let selected = selection.unit.as_deref() == Some(unit.as_str());
+            let mut entry = panel.spawn((
+                Node {
+                    border: UiRect::all(px(1)),
+                    ..default()
+                },
+                BorderColor::all(if selected { Color::WHITE } else { Color::NONE }),
+                UnitFilterButton(Some(unit.clone())),
+            ));
+            entry.observe(toggle_unit_filter);
+            entry.with_children(|entry| {
+                spawn_icon(
+                    entry,
+                    image,
+                    count.to_string(),
+                    format!("{unit}: {count}, click to show only its bars"),
+                );
+            });
+        }
+    });
 }
 
 fn step_time_with_keys(keys: Res<ButtonInput<KeyCode>>, mut time: ResMut<ReplayTime>) {
@@ -325,11 +469,45 @@ fn replay_panel() -> impl SceneList {
                 on(step_forward)
             ]
             --
-            Text("Per 4x4 cells and player: the units born in the color of the player, the units lost in a darker shade next to them. Left/Right arrows to move in time, Home/End for the start/end.")
+            @FeathersMenu
+            Children [
+                @FeathersMenuButton {
+                    @caption: bsn! { Text("Units died") ThemedText BarKindText }
+                }
+                AccessibleLabel("Units died or born")
+                Node {
+                    flex_grow: 1.0,
+                }
+                --
+                @FeathersMenuPopup
+                Children [
+                    @FeathersMenuItem {
+                        @caption: bsn! { Text("Units died") ThemedText }
+                    }
+                    on(show_units_died)
+                    --
+                    @FeathersMenuItem {
+                        @caption: bsn! { Text("Units born") ThemedText }
+                    }
+                    on(show_units_born)
+                ]
+            ]
+            --
+            Text("The bars count the units of each player per 4x4 cells, in the color of the player. Click on a unit to show only its bars, on a bar to see its units. Left/Right arrows to move in time, Home/End for the start/end.")
             ThemedText
             TextFont {
                 font_size: bevy::prelude::FontSize::Px(11.),
             }
+            --
+            Node {
+                display: Display::Flex,
+                flex_direction: FlexDirection::Row,
+                flex_wrap: FlexWrap::Wrap,
+                align_items: AlignItems::Center,
+                column_gap: px(4),
+                row_gap: px(4),
+            }
+            UnitsPanel
             --
             Node {
                 display: Display::Flex,
@@ -497,25 +675,6 @@ fn update_players_panel(
                             Color::from(palettes::tailwind::GRAY_400),
                         ));
                         header.spawn(small_text(marker, Color::from(result_color)));
-                        // The colors of the bars of the player.
-                        for (label, bar_color) in [
-                            ("born", born_color(player.color)),
-                            ("lost", lost_color(player.color)),
-                        ] {
-                            header.spawn((
-                                Node {
-                                    width: px(10),
-                                    height: px(10),
-                                    margin: UiRect::left(px(4)),
-                                    ..default()
-                                },
-                                BackgroundColor(bar_color),
-                            ));
-                            header.spawn(small_text(
-                                label.to_string(),
-                                Color::from(palettes::tailwind::GRAY_400),
-                            ));
-                        }
                     });
                     row.spawn(Node {
                         display: Display::Flex,
