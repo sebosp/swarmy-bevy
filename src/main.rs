@@ -12,7 +12,16 @@ use swarmy_bevy::replay::plugin::{ReplayPlugin, ReplayStartSeconds};
 
 fn main() {
     let args = Args::parse();
-    let path = args.path.trim_end_matches('/').to_string();
+    if !args.has_map() {
+        show_help();
+        return;
+    }
+    let path = args
+        .map_caches
+        .as_deref()
+        .unwrap_or_default()
+        .trim_end_matches('/')
+        .to_string();
     // The replay has the cache ids of its map.
     let replay = args.replay.as_deref().map(|replay| {
         ReplayData::load(replay).unwrap_or_else(|err| {
@@ -20,10 +29,10 @@ fn main() {
             std::process::exit(1);
         })
     });
-    let ids = match (&replay, args.ids) {
+    let ids = match (&replay, args.map_cache_ids) {
         (Some(replay), _) => replay.cache_handle_ids.join(","),
         (None, Some(ids)) => ids,
-        (None, None) => unreachable!("clap requires --ids without --replay"),
+        (None, None) => unreachable!("has_map requires the map cache ids without a replay"),
     };
     let mut app = App::new();
     if let Some(replay) = replay {
@@ -49,6 +58,34 @@ fn main() {
         .insert_resource(UiTheme(create_dark_theme()))
         .add_systems(PreStartup, load_gltf)
         .add_systems(Startup, setup_light_and_gizmo_control_text)
+        .run();
+}
+
+/// Without a map or a replay the window shows the help, swarmy starts swarmy-bevy with them.
+fn show_help() {
+    eprintln!("{}", help_text());
+    App::new()
+        .add_plugins(DefaultPlugins.set(WindowPlugin {
+            primary_window: Some(Window {
+                title: "swarmy-bevy".to_string(),
+                ..default()
+            }),
+            ..default()
+        }))
+        .add_systems(Startup, |mut commands: Commands| {
+            commands.spawn(Camera2d);
+            commands.spawn((
+                Text::new(help_text()),
+                TextFont {
+                    font_size: bevy::prelude::FontSize::Px(14.),
+                    ..default()
+                },
+                Node {
+                    margin: UiRect::all(px(24)),
+                    ..default()
+                },
+            ));
+        })
         .run();
 }
 
