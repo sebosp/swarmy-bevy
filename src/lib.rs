@@ -15,6 +15,7 @@ pub mod embedded_assets;
 pub mod map_info;
 pub mod replay;
 pub mod screenshot;
+pub mod siege_spots;
 pub mod swarmy_feathers;
 pub mod t3_height_map;
 pub mod t3_terrain;

@@ -5711,6 +5711,7 @@ dependencies = [
  "s2protocol",
  "serde",
  "serde-xml-rs",
+ "serde_json",
  "test-log",
  "thiserror 2.0.21",
  "tracing",

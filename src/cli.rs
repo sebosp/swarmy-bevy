@@ -46,6 +46,10 @@ pub struct Args {
     /// The game second the replay starts at, the start of the game by default.
     #[arg(long, value_name = "SECONDS", requires = "replay")]
     pub replay_seconds: Option<u32>,
+    /// A JSON file of swarmy with the spots where the Siege Tanks sieged on the map and their
+    /// kills, drawn as bars. swarmy writes it from "Siege Tank spots" in Map Details.
+    #[arg(long, value_name = "FILE", requires = "map_cache_ids")]
+    pub siege_spots: Option<String>,
     /// Saves a screenshot to this PNG file once the map is drawn and exits.
     #[arg(long, value_name = "FILE")]
     pub screenshot: Option<String>,
