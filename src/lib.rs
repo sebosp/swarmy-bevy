@@ -13,6 +13,7 @@ pub mod cli;
 pub mod document_header;
 pub mod embedded_assets;
 pub mod map_info;
+pub mod map_layers;
 pub mod replay;
 pub mod screenshot;
 pub mod siege_spots;

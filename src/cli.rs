@@ -50,6 +50,10 @@ pub struct Args {
     /// kills, drawn as bars. swarmy writes it from "Siege Tank spots" in Map Details.
     #[arg(long, value_name = "FILE", requires = "map_cache_ids")]
     pub siege_spots: Option<String>,
+    /// A JSON file of swarmy with the fights, proxies, creep tumors and early buildings of the
+    /// games of the map, drawn as bars. swarmy writes it from "Map lessons" in Map Details.
+    #[arg(long, value_name = "FILE", requires = "map_cache_ids")]
+    pub map_layers: Option<String>,
     /// Saves a screenshot to this PNG file once the map is drawn and exits.
     #[arg(long, value_name = "FILE")]
     pub screenshot: Option<String>,
