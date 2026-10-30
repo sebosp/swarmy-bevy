@@ -2,7 +2,7 @@
 //! proxies, the creep tumors and the early buildings, a layer each, as bars on top of the terrain.
 //! The height of a bar is its count compared to the most counted spot of its layer, each layer has
 //! its color and its quarter of the spots so that the layers of a spot are seen side by side. The
-//! keys 1 to 4 show or hide the layers, clicking a bar shows its numbers.
+//! keys F1 to F4 show or hide the layers (2 toggles the round gizmos), clicking a bar shows its numbers.
 //!
 //! swarmy writes the layers as JSON, see `MapLayers` in swarmy-common, and passes the file with
 //! `--map-layers`.
@@ -21,12 +21,7 @@ const MAX_BAR_HEIGHT: f32 = 4.;
 const BAR_SHARE: f32 = 0.8;
 
 /// The keys that show or hide the layers, in order.
-const LAYER_KEYS: [KeyCode; 4] = [
-    KeyCode::Digit1,
-    KeyCode::Digit2,
-    KeyCode::Digit3,
-    KeyCode::Digit4,
-];
+const LAYER_KEYS: [KeyCode; 4] = [KeyCode::F1, KeyCode::F2, KeyCode::F3, KeyCode::F4];
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct MapLayerSpot {
@@ -180,7 +175,7 @@ fn spawn_legend(mut commands: Commands, layers: Res<MapLayers>) {
         .map(|(idx, layer)| {
             let total: usize = layer.spots.iter().map(|spot| spot.count).sum();
             format!(
-                "{}: {} ({total}) - {}",
+                "F{}: {} ({total}) - {}",
                 idx + 1,
                 layer.label,
                 layer.description
@@ -189,7 +184,7 @@ fn spawn_legend(mut commands: Commands, layers: Res<MapLayers>) {
         .collect();
     commands.spawn((
         Text::new(format!(
-            "Map lessons of {}, {} games\nKeys 1 to 4 show or hide a layer\n{}",
+            "Map lessons of {}, {} games\nF1 to F4 show or hide a layer\n{}",
             layers.map_title,
             layers.games,
             lines.join("\n")
