@@ -7,8 +7,10 @@ use clap::Parser;
 use swarmy_bevy::MapScene;
 use swarmy_bevy::cli::*;
 use swarmy_bevy::embedded_assets::{EmbeddedAssetsPlugin, SWARMY_OBJECTS_GLTF};
+use swarmy_bevy::map_layers::{MapLayers, MapLayersPlugin};
 use swarmy_bevy::replay::ReplayData;
 use swarmy_bevy::replay::plugin::{ReplayPlugin, ReplayStartSeconds};
+use swarmy_bevy::siege_spots::{SiegeSpots, SiegeSpotsPlugin};
 
 fn main() {
     let args = Args::parse();
@@ -34,7 +36,26 @@ fn main() {
         (None, Some(ids)) => ids,
         (None, None) => unreachable!("has_map requires the map cache ids without a replay"),
     };
+    let siege_spots = args.siege_spots.as_deref().map(|path| {
+        SiegeSpots::load(path).unwrap_or_else(|err| {
+            eprintln!("Unable to read the siege spots {err}");
+            std::process::exit(1);
+        })
+    });
+    let map_layers = args.map_layers.as_deref().map(|path| {
+        MapLayers::load(path).unwrap_or_else(|err| {
+            eprintln!("Unable to read the map layers {err}");
+            std::process::exit(1);
+        })
+    });
     let mut app = App::new();
+    if let Some(map_layers) = map_layers {
+        app.insert_resource(map_layers).add_plugins(MapLayersPlugin);
+    }
+    if let Some(siege_spots) = siege_spots {
+        app.insert_resource(siege_spots)
+            .add_plugins(SiegeSpotsPlugin);
+    }
     if let Some(replay) = replay {
         app.insert_resource(replay)
             .insert_resource(ReplayStartSeconds(args.replay_seconds))
