@@ -5376,13 +5376,12 @@ dependencies = [
 
 [[package]]
 name = "s2protocol"
-version = "4.1.0"
+version = "5.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "64b11898b33c1c2b1a90ca4736bf25387265c7ddddd1106d2cd94bb120825ead"
+checksum = "1e82894e298d887fc0cbf4e01aeb17c787d29d73a117acd6c6acbeeafcefc044"
 dependencies = [
  "chrono",
  "colored",
- "convert_case 0.12.0",
  "futures",
  "include_dir",
  "nom",
@@ -5391,6 +5390,7 @@ dependencies = [
  "serde",
  "serde-xml-rs",
  "serde_json",
+ "serde_mpq",
  "sha256",
  "thiserror 2.0.21",
  "tracing",
@@ -5495,6 +5495,31 @@ dependencies = [
  "serde",
  "serde_core",
  "zmij",
+]
+
+[[package]]
+name = "serde_mpq"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7680758b5e96705237b450fe0150e2cf35e7bd2ff01241fc9f655736ac23e418"
+dependencies = [
+ "colored",
+ "nom",
+ "serde",
+ "serde_mpq_derive",
+ "thiserror 2.0.21",
+ "tracing",
+]
+
+[[package]]
+name = "serde_mpq_derive"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d5417c0df7c689426e69eedb27d990a6fd059fa59a9263c77c26b4d60aa57dbb"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -5697,7 +5722,7 @@ checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
 
 [[package]]
 name = "swarmy-bevy"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "bevy",
  "bevy_skein",
