@@ -195,6 +195,7 @@ pub fn load_t3_terrain(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut loaded: Local<bool>,
     replay: Option<Res<crate::replay::ReplayData>>,
+    overlays: crate::t3_height_map::Overlays,
 ) {
     if *loaded {
         return;
@@ -205,8 +206,9 @@ pub fn load_t3_terrain(
         RAMP_TILE_THICKNESS * MAP_SCALE_FACTOR,
         MAP_SCALE_FACTOR,
     ))));
-    // A replay is drawn in grays so that the ramps do not look like the bars of the players.
-    let (ramp_color, top_color, edge_color) = if replay.is_some() {
+    // A replay, the map lessons and the siege spots are drawn in grays so that the ramps do not
+    // look like their bars.
+    let (ramp_color, top_color, edge_color) = if replay.is_some() || overlays.any() {
         (
             palettes::tailwind::STONE_400,
             palettes::tailwind::STONE_200,

@@ -8,6 +8,7 @@ use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::post_process::bloom::Bloom;
 use bevy::prelude::*;
 use s2protocol::cache_handles::map::coords::*;
+use std::collections::HashMap;
 
 pub const CELL_HEIGHT_MULTIPLIER: f32 = 5.;
 
@@ -83,7 +84,10 @@ pub fn load_t3_height_map(
     t3_height_map: ResMut<T3HeightMapResource>,
     map_info: Res<MapInfoResource>,
     replay: Option<Res<crate::replay::ReplayData>>,
+    overlays: Overlays,
 ) -> Result<(), BevyError> {
+    // In grays when bars are drawn on top, so that their colors stand out.
+    let grays = replay.is_some() || overlays.any();
     let max_map_dim = t3_height_map.width.max(t3_height_map.height);
     let map_size = max_map_dim as f32 * MAP_SCALE_FACTOR;
     commands.spawn((
@@ -97,14 +101,18 @@ pub fn load_t3_height_map(
         Bloom::default(),
         FreeCamera::default(),
     ));
-    // light
+    // The light, without shadows: the terrain is a grid of cells, shadows cost much and say little.
     commands.spawn((
         PointLight {
-            shadow_maps_enabled: true,
+            shadow_maps_enabled: false,
             ..default()
         },
         Transform::from_xyz(4.0, 8.0, 4.0),
     ));
+    // The cells share a mesh per height and a material per color, so that they are drawn in
+    // batches: a mesh and a material per cell made a 200x200 map 40,000 draws.
+    let mut cell_meshes: HashMap<u8, Handle<Mesh>> = HashMap::new();
+    let mut cell_materials: HashMap<[u8; 4], Handle<StandardMaterial>> = HashMap::new();
 
     // Cuboids for the cells, the data is row by row from the bottom left corner, the same
     // index the objects and ramps use to find their height.
@@ -119,7 +127,21 @@ pub fn load_t3_height_map(
             .get(idx)
             .copied()
             .unwrap_or(*cell_height);
-        let cell_color = compute_cell_color(level, x, y, &map_info, replay.is_some());
+        let cell_color = compute_cell_color(level, x, y, &map_info, grays);
+        let mesh = cell_meshes
+            .entry(*cell_height)
+            .or_insert_with(|| {
+                meshes.add(Cuboid::from_size(Vec3::new(
+                    MAP_SCALE_FACTOR,
+                    *cell_height as f32 * CELL_HEIGHT_MULTIPLIER * MAP_SCALE_FACTOR,
+                    MAP_SCALE_FACTOR,
+                )))
+            })
+            .clone();
+        let material = cell_materials
+            .entry(cell_color.to_srgba().to_u8_array())
+            .or_insert_with(|| materials.add(cell_color))
+            .clone();
         let (x, y) = (x as f32, y as f32);
         commands.spawn((
             TerrainCell {
@@ -130,12 +152,8 @@ pub fn load_t3_height_map(
                 scl_y: *cell_height as f32,
                 scl_z: MAP_SCALE_FACTOR,
             },
-            Mesh3d(meshes.add(Cuboid::from_size(Vec3::new(
-                MAP_SCALE_FACTOR,
-                *cell_height as f32 * CELL_HEIGHT_MULTIPLIER * MAP_SCALE_FACTOR,
-                MAP_SCALE_FACTOR,
-            )))),
-            MeshMaterial3d(materials.add(cell_color)),
+            Mesh3d(mesh),
+            MeshMaterial3d(material),
             //SceneRoot(asset_server.load(GltfAssetLabel::Mesh(0).from_asset("swarmy-objects.gltf"))),
             Transform::from_xyz(
                 y * MAP_SCALE_FACTOR,
@@ -145,6 +163,19 @@ pub fn load_t3_height_map(
         ));
     }
     Ok(())
+}
+
+/// The bars drawn on top of the terrain besides a replay: the map lessons and the siege spots.
+#[derive(bevy::ecs::system::SystemParam)]
+pub struct Overlays<'w> {
+    layers: Option<Res<'w, crate::map_layers::MapLayers>>,
+    siege_spots: Option<Res<'w, crate::siege_spots::SiegeSpots>>,
+}
+
+impl Overlays<'_> {
+    pub fn any(&self) -> bool {
+        self.layers.is_some() || self.siege_spots.is_some()
+    }
 }
 
 /// The color of a cell by its level. A replay is drawn in grays, darker the lower, so that the

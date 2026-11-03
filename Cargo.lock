@@ -5376,9 +5376,9 @@ dependencies = [
 
 [[package]]
 name = "s2protocol"
-version = "5.0.0"
+version = "5.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e82894e298d887fc0cbf4e01aeb17c787d29d73a117acd6c6acbeeafcefc044"
+checksum = "39d380d32891565ecbc63f7f16bd54da9802e070fa048860e43de6181c99c99c"
 dependencies = [
  "chrono",
  "colored",
@@ -5722,7 +5722,7 @@ checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
 
 [[package]]
 name = "swarmy-bevy"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "bevy",
  "bevy_skein",

@@ -26,8 +26,8 @@ pub const MAX_BAR_HEIGHT: f32 = 4.;
 /// The width of a bar in map cells.
 const BAR_WIDTH_CELLS: f32 = AGGREGATE_CELLS as f32 * 0.8;
 
-/// The depth of the bars of all the players of a cell in map cells, the players are one after
-/// the other.
+/// The depth of the bars of a cell in map cells: one player's bar takes all of it, the bars of
+/// several players in the same cell share it, one after the other.
 const BAR_DEPTH_CELLS: f32 = AGGREGATE_CELLS as f32 * 0.8;
 
 /// The unit types shown in the units panel, the most frequent ones.
@@ -40,7 +40,7 @@ pub fn player_color(color: [u8; 4]) -> Color {
 }
 
 /// The size of the upgrade and unit icons in the players panel.
-const ICON_SIZE: f32 = 28.;
+const ICON_SIZE: f32 = 32.;
 
 pub struct ReplayPlugin;
 
@@ -195,9 +195,8 @@ fn spawn_bars(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    let players = replay.players.len().max(1);
     let width = BAR_WIDTH_CELLS * MAP_SCALE_FACTOR;
-    let depth = BAR_DEPTH_CELLS * MAP_SCALE_FACTOR / players as f32;
+    let depth = BAR_DEPTH_CELLS * MAP_SCALE_FACTOR;
     let mesh = Mesh3d(meshes.add(Cuboid::from_size(Vec3::new(width, 1., depth))));
     let player_materials: Vec<_> = replay
         .players
@@ -214,8 +213,6 @@ fn spawn_bars(
         .collect();
     for (cell, player) in replay.cell_players() {
         let (world_x, world_z) = cell_center(cell);
-        // The players of a cell one after the other, centered on the cell.
-        let player_offset = (player as f32 - (players - 1) as f32 / 2.) * depth;
         let Some(material) = player_materials.get(player) else {
             continue;
         };
@@ -226,14 +223,11 @@ fn spawn_bars(
                 DisplayInfoOnClick,
                 mesh.clone(),
                 material.clone(),
-                Transform::from_xyz(
-                    world_x,
-                    terrain_top(FLAT_TERRAIN_LEVEL),
-                    world_z + player_offset,
-                ),
+                Transform::from_xyz(world_x, terrain_top(FLAT_TERRAIN_LEVEL), world_z),
                 Visibility::Hidden,
             ))
-            .observe(update_info_on_click);
+            .observe(update_info_on_click)
+            .observe(show_bar_units);
     }
 }
 
@@ -251,6 +245,14 @@ fn update_bars(
     let counts = replay.cell_counts(seconds, selection.kind, unit);
     let max_count = replay.max_cell_count(selection.kind, unit).max(1) as f32;
     let ground = terrain_top(FLAT_TERRAIN_LEVEL);
+    // The players with units in each cell at this time: a bar alone takes the whole cell.
+    let mut cell_players: HashMap<(u32, u32), Vec<usize>> = HashMap::new();
+    for ((cell, player), count) in &counts {
+        if *count > 0 {
+            cell_players.entry(*cell).or_default().push(*player);
+        }
+    }
+    let depth = BAR_DEPTH_CELLS * MAP_SCALE_FACTOR;
     for (bar, mut transform, mut visibility, mut name) in &mut bars {
         let count = counts
             .get(&(bar.cell, bar.player))
@@ -264,6 +266,18 @@ fn update_bars(
         let height = count as f32 / max_count * MAX_BAR_HEIGHT;
         transform.scale.y = height;
         transform.translation.y = ground + height / 2.;
+        let present = cell_players
+            .get(&bar.cell)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        let shared = present.len().max(1) as f32;
+        let position = present
+            .iter()
+            .position(|player| *player == bar.player)
+            .unwrap_or(0) as f32;
+        transform.scale.z = 1. / shared;
+        let (_, center_z) = cell_center(bar.cell);
+        transform.translation.z = center_z + (position - (shared - 1.) / 2.) * depth / shared;
         let (x, y) = (bar.cell.0 * AGGREGATE_CELLS, bar.cell.1 * AGGREGATE_CELLS);
         let player = replay
             .players
@@ -439,9 +453,9 @@ fn replay_panel() -> impl SceneList {
     bsn_list! {
         Node {
             position_type: PositionType::Absolute,
-            top: px(40),
+            top: px(44),
             right: px(8),
-            width: px(380),
+            width: px(420),
             display: Display::Flex,
             flex_direction: FlexDirection::Column,
             padding: px(8),
@@ -462,6 +476,9 @@ fn replay_panel() -> impl SceneList {
                 on(step_backward)
                 --
                 Text("") ThemedText ReplayTimeText
+                TextFont {
+                    font_size: bevy::prelude::FontSize::Px(16.),
+                }
                 --
                 @FeathersButton {
                     @caption: bsn! { Text(">") ThemedText }
@@ -492,12 +509,6 @@ fn replay_panel() -> impl SceneList {
                     on(show_units_born)
                 ]
             ]
-            --
-            Text("The bars count the units of each player per 4x4 cells, in the color of the player. Click on a unit to show only its bars, on a bar to see its units. Left/Right arrows to move in time, Home/End for the start/end.")
-            ThemedText
-            TextFont {
-                font_size: bevy::prelude::FontSize::Px(11.),
-            }
             --
             Node {
                 display: Display::Flex,
@@ -535,7 +546,7 @@ fn small_text(text: impl Into<String>, color: Color) -> impl Bundle {
         Text::new(text),
         TextColor(color),
         TextFont {
-            font_size: bevy::prelude::FontSize::Px(11.),
+            font_size: bevy::prelude::FontSize::Px(13.),
             ..default()
         },
     )
@@ -597,17 +608,30 @@ fn update_players_panel(
     panel: Single<Entity, With<ReplayPlayersPanel>>,
     mut icons: ResMut<IconImages>,
     mut images: ResMut<Assets<Image>>,
+    mut markers: Local<Option<ResultMarkers>>,
 ) {
+    let markers = markers.get_or_insert_with(|| ResultMarkers::new(&mut images));
     let seconds = time.seconds();
+    // The winners first, then the losers, as in swarmy.
+    let mut order: Vec<usize> = (0..replay.players.len()).collect();
+    order.sort_by_key(|idx| match replay.players[*idx].result.as_str() {
+        "Win" => 0,
+        "Loss" => 1,
+        _ => 2,
+    });
+    let win_marker = markers.win.clone();
+    let loss_marker = markers.loss.clone();
     commands.entity(*panel).despawn_related::<Children>();
     commands.entity(*panel).with_children(|panel| {
-        for (idx, player) in replay.players.iter().enumerate() {
+        for idx in order {
+            let player = &replay.players[idx];
             let [r, g, b, a] = player.color;
             let color = Color::srgba_u8(r, g, b, a);
-            let (marker, result_color) = match player.result.as_str() {
-                "Win" => ("Win", palettes::tailwind::GREEN_500),
-                "Loss" => ("Loss", palettes::tailwind::RED_500),
-                _ => (player.result.as_str(), palettes::tailwind::GRAY_400),
+            // A green triangle up for a winner, a red one down for a loser, as in swarmy.
+            let marker = match player.result.as_str() {
+                "Win" => Some(win_marker.clone()),
+                "Loss" => Some(loss_marker.clone()),
+                _ => None,
             };
             let upgrades = replay.upgrades_until(idx, seconds);
             let upgrade_icons: Vec<_> = upgrades
@@ -654,27 +678,36 @@ fn update_players_panel(
                         ..default()
                     })
                     .with_children(|header| {
+                        if let Some(marker) = marker.clone() {
+                            header.spawn((
+                                ImageNode::new(marker),
+                                Node {
+                                    width: px(14),
+                                    height: px(14),
+                                    ..default()
+                                },
+                            ));
+                        }
                         header.spawn((
                             Node {
-                                width: px(12),
-                                height: px(12),
+                                width: px(14),
+                                height: px(14),
                                 ..default()
                             },
                             BackgroundColor(color),
                         ));
                         header.spawn((
                             Text::new(player.name.clone()),
-                            TextColor(color),
+                            TextColor(Color::WHITE),
                             TextFont {
-                                font_size: bevy::prelude::FontSize::Px(14.),
+                                font_size: bevy::prelude::FontSize::Px(16.),
                                 ..default()
                             },
                         ));
                         header.spawn(small_text(
                             player.race.clone(),
-                            Color::from(palettes::tailwind::GRAY_400),
+                            Color::from(palettes::tailwind::GRAY_300),
                         ));
-                        header.spawn(small_text(marker, Color::from(result_color)));
                     });
                     row.spawn(Node {
                         display: Display::Flex,
@@ -720,4 +753,105 @@ fn update_players_panel(
                 });
         }
     });
+}
+
+/// The triangles of a winner and of a loser: the default font has no arrows, they are drawn.
+struct ResultMarkers {
+    win: Handle<Image>,
+    loss: Handle<Image>,
+}
+
+impl ResultMarkers {
+    fn new(images: &mut Assets<Image>) -> Self {
+        Self {
+            win: images.add(triangle_image(true, palettes::tailwind::GREEN_500)),
+            loss: images.add(triangle_image(false, palettes::tailwind::RED_500)),
+        }
+    }
+}
+
+/// A triangle pointing up or down in a square image, transparent around it.
+fn triangle_image(up: bool, color: Srgba) -> Image {
+    const SIZE: usize = 32;
+    let [r, g, b, a] = color.to_u8_array();
+    let mut data = vec![0u8; SIZE * SIZE * 4];
+    for row in 0..SIZE {
+        // The width of the triangle grows from its point to its base.
+        let from_point = if up { row } else { SIZE - 1 - row };
+        let half = (from_point as f32 + 1.) / 2.;
+        for column in 0..SIZE {
+            let distance = (column as f32 + 0.5 - SIZE as f32 / 2.).abs();
+            if distance <= half {
+                let idx = (row * SIZE + column) * 4;
+                data[idx..idx + 4].copy_from_slice(&[r, g, b, a]);
+            }
+        }
+    }
+    Image::new(
+        bevy::render::render_resource::Extent3d {
+            width: SIZE as u32,
+            height: SIZE as u32,
+            depth_or_array_layers: 1,
+        },
+        bevy::render::render_resource::TextureDimension::D2,
+        data,
+        bevy::render::render_resource::TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::default(),
+    )
+}
+
+/// Clicking a bar shows its units with their icons in the selection panel.
+#[allow(clippy::too_many_arguments)]
+fn show_bar_units(
+    click: On<PointerClick>,
+    mut commands: Commands,
+    bars: Query<&CellBar>,
+    replay: Res<ReplayData>,
+    time: Res<ReplayTime>,
+    selection: Res<BarSelection>,
+    selection_icons: Single<Entity, With<crate::swarmy_feathers::SelectionIcons>>,
+    mut icons: ResMut<IconImages>,
+    mut images: ResMut<Assets<Image>>,
+) {
+    let Ok(bar) = bars.get(click.entity) else {
+        return;
+    };
+    let unit = selection.unit.as_deref();
+    let units: Vec<_> = replay
+        .unit_counts(time.seconds(), selection.kind, Some((bar.cell, bar.player)))
+        .into_iter()
+        .filter(|(name, _)| unit.is_none_or(|unit| unit == name))
+        .map(|(name, count)| {
+            let image = replay
+                .unit_icons
+                .get(&name)
+                .and_then(|icon| icons.get(icon, &mut images));
+            (image, name, count)
+        })
+        .collect();
+    commands.entity(*selection_icons).with_children(|panel| {
+        for (image, name, count) in units {
+            spawn_icon(panel, image, count.to_string(), format!("{name}: {count}"));
+        }
+    });
+}
+
+#[cfg(test)]
+mod marker_tests {
+    use super::*;
+
+    #[test]
+    fn it_draws_the_triangles_of_the_results() {
+        let up = triangle_image(true, palettes::tailwind::GREEN_500);
+        let data = up.data.as_ref().unwrap();
+        let alpha = |row: usize, column: usize| data[(row * 32 + column) * 4 + 3];
+        // The point at the top, the base at the bottom, transparent around.
+        assert_eq!(alpha(0, 0), 0);
+        assert!(alpha(0, 16) > 0);
+        assert!(alpha(31, 1) > 0);
+        let down = triangle_image(false, palettes::tailwind::RED_500);
+        let data = down.data.as_ref().unwrap();
+        assert!(data[(31 * 32 + 16) * 4 + 3] > 0);
+        assert_eq!(data[(31 * 32) * 4 + 3], 0);
+    }
 }
