@@ -21,6 +21,13 @@ impl Plugin for MapPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(PreStartup, load_cache_depot_map_resources);
         app.add_systems(Startup, MapPlugin::scene.spawn());
+        app.add_systems(
+            Update,
+            (
+                swarmy_feathers::show_selection_pane,
+                swarmy_feathers::close_selection_on_escape,
+            ),
+        );
         // The map resources are missing when the map cache is not downloaded, the error is shown
         // instead of the map.
         app.add_systems(Startup, t3_height_map::load_t3_height_map.run_if(has_map));
@@ -87,7 +94,7 @@ fn has_map(
 
 impl MapPlugin {
     fn scene() -> impl SceneList {
-        bsn_list! { @swarmy_feathers::init_feathers() }
+        bsn_list! { @swarmy_feathers::init_feathers() -- @swarmy_feathers::selection_pane() }
     }
 }
 

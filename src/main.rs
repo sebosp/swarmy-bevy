@@ -72,13 +72,14 @@ fn main() {
             FeathersPlugins,
             SkeinPlugin::default(),
             FreeCameraPlugin,
+            swarmy_bevy::view_settings::ViewSettingsPlugin,
+            swarmy_bevy::help_ui::HelpUiPlugin,
             swarmy_bevy::map_plugin::MapPlugin,
             MeshPickingPlugin,
             swarmy_bevy::screenshot::ScreenshotPlugin,
         ))
         .insert_resource(UiTheme(create_dark_theme()))
         .add_systems(PreStartup, load_gltf)
-        .add_systems(Startup, setup_light_and_gizmo_control_text)
         .run();
 }
 
@@ -108,39 +109,6 @@ fn show_help() {
             ));
         })
         .run();
-}
-
-fn setup_light_and_gizmo_control_text(mut commands: Commands) {
-    // light
-    commands.spawn((
-        PointLight {
-            shadow_maps_enabled: true,
-            ..default()
-        },
-        Transform::from_xyz(4.0, 8.0, 4.0),
-    ));
-
-    // basic instructions
-    // However other plugins have more controls, such as F1/F2 for brightness, etc.
-    commands.spawn((
-        Text::new(
-            "Controls:\n\
-            W/A/S/D to move (Shift for speed)\n\
-            Mouse drag (scroll for speed)\n\
-            B for AABB\n\
-            M for lock/unlock mouse navigation",
-        ),
-        Node {
-            position_type: PositionType::Absolute,
-            bottom: px(12),
-            left: px(12),
-            ..default()
-        },
-        TextFont {
-            font_size: bevy::prelude::FontSize::Px(11.),
-            ..default()
-        },
-    ));
 }
 
 fn load_gltf(mut commands: Commands, asset_server: Res<AssetServer>) {

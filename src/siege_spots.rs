@@ -15,6 +15,9 @@ use serde::Deserialize;
 /// The tallest bar, for the spot with the most kills, in world units.
 const MAX_BAR_HEIGHT: f32 = 4.;
 
+/// The steps of the colors of the bars, from yellow to red.
+const COLOR_STEPS: usize = 8;
+
 /// The bars cover this share of their spot, so that the spots next to each other are apart.
 const BAR_SHARE: f32 = 0.8;
 
@@ -107,6 +110,8 @@ fn spawn_spots(
         .fold(0., f32::max);
     let side = spots.spot_cells as f32 * BAR_SHARE * MAP_SCALE_FACTOR;
     let mesh = Mesh3d(meshes.add(Cuboid::from_size(Vec3::new(side, 1., side))));
+    let mut step_materials: std::collections::HashMap<usize, MeshMaterial3d<StandardMaterial>> =
+        std::collections::HashMap::new();
     for (rank, spot) in spots.spots.iter().enumerate() {
         let (map_x, map_y) = spots.center(spot);
         let ground = height_map
@@ -115,12 +120,21 @@ fn spawn_spots(
             .unwrap_or_default();
         // The spots without kills are a thin plate, so that they are seen.
         let height = (spot.kills as f32 / max_kills * MAX_BAR_HEIGHT).max(0.05);
-        let color = spot_color(spot.kills_per_siege(), max_kills_per_siege);
-        let material = MeshMaterial3d(materials.add(StandardMaterial {
-            base_color: color,
-            emissive: color.to_linear() * 0.6,
-            ..default()
-        }));
+        // The colors are rounded to a few steps, the bars of a step share their material.
+        let step = (spot.kills_per_siege() / max_kills_per_siege.max(1.) * COLOR_STEPS as f32)
+            .round()
+            .clamp(0., COLOR_STEPS as f32) as usize;
+        let material = step_materials
+            .entry(step)
+            .or_insert_with(|| {
+                let color = spot_color(step as f32, COLOR_STEPS as f32);
+                MeshMaterial3d(materials.add(StandardMaterial {
+                    base_color: color,
+                    emissive: color.to_linear() * 0.6,
+                    ..default()
+                }))
+            })
+            .clone();
         let cells = spots.spot_cells;
         let (x, y) = (spot.x * cells, spot.y * cells);
         commands
@@ -150,34 +164,94 @@ fn spawn_spots(
     }
 }
 
+/// The legend at the left: the map, the totals, what the height and the colors mean.
 fn spawn_legend(mut commands: Commands, spots: Res<SiegeSpots>) {
-    let best = spots
-        .spots
-        .first()
-        .map(|spot| {
-            let (x, y) = (spot.x * spots.spot_cells, spot.y * spots.spot_cells);
-            format!(
-                "\nMost kills: cells ({x}, {y}), {} kills in {} sieges",
-                spot.kills, spot.sieges
-            )
-        })
-        .unwrap_or_default();
-    commands.spawn((
-        Text::new(format!(
-            "Siege Tank spots of {}\n{} sieges in {} games, {} kills\nHeight: kills, yellow to red: kills per siege{best}",
-            spots.map_title, spots.sieges, spots.games, spots.kills,
-        )),
-        TextFont {
-            font_size: bevy::prelude::FontSize::Px(12.),
-            ..default()
-        },
-        Node {
-            position_type: PositionType::Absolute,
-            top: px(40),
-            right: px(12),
-            ..default()
-        },
-    ));
+    let text_color = Color::srgb(0.93, 0.94, 0.96);
+    let muted = Color::srgb(0.68, 0.71, 0.76);
+    let font = |size: f32| TextFont {
+        font_size: bevy::prelude::FontSize::Px(size),
+        ..default()
+    };
+    let best = spots.spots.first().map(|spot| {
+        let (x, y) = (spot.x * spots.spot_cells, spot.y * spots.spot_cells);
+        format!(
+            "The most kills at ({x}, {y}): {} kills in {} sieges",
+            spot.kills, spot.sieges
+        )
+    });
+    commands
+        .spawn((
+            Name::new("Siege spots legend"),
+            Node {
+                position_type: PositionType::Absolute,
+                top: px(56),
+                left: px(8),
+                max_width: px(460),
+                display: Display::Flex,
+                flex_direction: FlexDirection::Column,
+                padding: UiRect::all(px(10)),
+                row_gap: px(8),
+                border_radius: BorderRadius::all(px(6)),
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.07, 0.08, 0.1, 0.88)),
+        ))
+        .with_children(|legend| {
+            legend.spawn((
+                Text::new(format!("Siege Tank spots of {}", spots.map_title)),
+                font(16.),
+                TextColor(text_color),
+            ));
+            legend.spawn((
+                Text::new(format!(
+                    "{} sieges in {} games, {} kills",
+                    spots.sieges, spots.games, spots.kills
+                )),
+                font(14.),
+                TextColor(text_color),
+            ));
+            legend.spawn((
+                Text::new("The height of a bar is the enemy units killed from its spot"),
+                font(13.),
+                TextColor(muted),
+            ));
+            // The color scale, from few kills per siege to the most.
+            legend
+                .spawn(Node {
+                    display: Display::Flex,
+                    flex_direction: FlexDirection::Row,
+                    align_items: AlignItems::Center,
+                    column_gap: px(6),
+                    ..default()
+                })
+                .with_children(|scale| {
+                    scale.spawn((
+                        Text::new("Few kills per siege"),
+                        font(13.),
+                        TextColor(muted),
+                    ));
+                    for step in 0..5 {
+                        scale.spawn((
+                            Node {
+                                width: px(18),
+                                height: px(12),
+                                border_radius: BorderRadius::all(px(2)),
+                                ..default()
+                            },
+                            BackgroundColor(spot_color(step as f32, 4.)),
+                        ));
+                    }
+                    scale.spawn((Text::new("the most"), font(13.), TextColor(muted)));
+                });
+            if let Some(best) = best {
+                legend.spawn((Text::new(best), font(13.), TextColor(muted)));
+            }
+            legend.spawn((
+                Text::new("Click a bar for its numbers, ? at the top right explains the rest"),
+                font(13.),
+                TextColor(muted),
+            ));
+        });
 }
 
 #[cfg(test)]

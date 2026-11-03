@@ -2,7 +2,8 @@
 //! proxies, the creep tumors and the early buildings, a layer each, as bars on top of the terrain.
 //! The height of a bar is its count compared to the most counted spot of its layer, each layer has
 //! its color and its quarter of the spots so that the layers of a spot are seen side by side. The
-//! keys F1 to F4 show or hide the layers (2 toggles the round gizmos), clicking a bar shows its numbers.
+//! keys F1 to F4 show or hide the layers (2 toggles the round gizmos), clicking a bar shows its
+//! numbers. The legend at the left names the colors, the keys and the totals.
 //!
 //! swarmy writes the layers as JSON, see `MapLayers` in swarmy-common, and passes the file with
 //! `--map-layers`.
@@ -54,14 +55,24 @@ impl MapLayers {
     }
 }
 
-/// The color of a layer by its kind.
+/// The color of a layer by its kind: four hues apart from each other and from the gray terrain.
 fn layer_color(kind: &str) -> Color {
     Color::from(match kind {
         "fights" => palettes::tailwind::RED_500,
-        "proxies" => palettes::tailwind::PURPLE_500,
-        "creep" => palettes::tailwind::PINK_400,
-        _ => palettes::tailwind::CYAN_400,
+        "proxies" => palettes::tailwind::BLUE_400,
+        "creep" => palettes::tailwind::FUCHSIA_400,
+        _ => palettes::tailwind::AMBER_400,
     })
+}
+
+/// The name of the color of a layer, for Help and the legend.
+pub fn layer_color_name(kind: &str) -> &'static str {
+    match kind {
+        "fights" => "red",
+        "proxies" => "blue",
+        "creep" => "magenta",
+        _ => "amber",
+    }
 }
 
 /// The quarter of the spot of the nth layer, in map cells from the corner of the spot.
@@ -154,67 +165,135 @@ fn spawn_bars(
     }
 }
 
-fn toggle_layers(keys: Res<ButtonInput<KeyCode>>, mut bars: Query<(&LayerBar, &mut Visibility)>) {
+/// The state of a layer in the legend, shown or hidden.
+#[derive(Component)]
+struct LayerState(usize);
+
+fn toggle_layers(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut bars: Query<(&LayerBar, &mut Visibility)>,
+    mut states: Query<(&LayerState, &mut Text)>,
+) {
     for (idx, key) in LAYER_KEYS.iter().enumerate() {
         if !keys.just_pressed(*key) {
             continue;
         }
+        let mut shown = true;
         for (bar, mut visibility) in &mut bars {
             if bar.0 == idx {
                 visibility.toggle_visible_hidden();
+                shown = *visibility != Visibility::Hidden;
+            }
+        }
+        for (state, mut text) in &mut states {
+            if state.0 == idx {
+                text.0 = if shown { "shown" } else { "hidden" }.to_string();
             }
         }
     }
 }
 
+/// The legend at the left: what each color is, its key, its total and whether it is shown.
 fn spawn_legend(mut commands: Commands, layers: Res<MapLayers>) {
-    let lines: Vec<String> = layers
-        .layers
-        .iter()
-        .enumerate()
-        .map(|(idx, layer)| {
-            let total: usize = layer.spots.iter().map(|spot| spot.count).sum();
-            format!(
-                "F{}: {} ({total}) - {}",
-                idx + 1,
-                layer.label,
-                layer.description
-            )
-        })
-        .collect();
-    commands.spawn((
-        Text::new(format!(
-            "Map lessons of {}, {} games\nF1 to F4 show or hide a layer\n{}",
-            layers.map_title,
-            layers.games,
-            lines.join("\n")
-        )),
-        TextFont {
-            font_size: bevy::prelude::FontSize::Px(12.),
-            ..default()
-        },
-        Node {
-            position_type: PositionType::Absolute,
-            top: px(40),
-            right: px(12),
-            max_width: px(420),
-            ..default()
-        },
-    ));
-    // The colors of the layers, a square each.
-    for (idx, layer) in layers.layers.iter().enumerate() {
-        commands.spawn((
+    let text_color = Color::srgb(0.93, 0.94, 0.96);
+    let muted = Color::srgb(0.68, 0.71, 0.76);
+    commands
+        .spawn((
+            Name::new("Map lessons legend"),
             Node {
                 position_type: PositionType::Absolute,
-                top: px(40 + 16 * (3 + idx as i32)),
-                right: px(440),
-                width: px(10),
-                height: px(10),
+                top: px(56),
+                left: px(8),
+                max_width: px(460),
+                display: Display::Flex,
+                flex_direction: FlexDirection::Column,
+                padding: UiRect::all(px(10)),
+                row_gap: px(8),
+                border_radius: BorderRadius::all(px(6)),
                 ..default()
             },
-            BackgroundColor(layer_color(&layer.kind)),
-        ));
-    }
+            BackgroundColor(Color::srgba(0.07, 0.08, 0.1, 0.88)),
+        ))
+        .with_children(|legend| {
+            legend.spawn((
+                Text::new(format!(
+                    "Map lessons of {}, {} games",
+                    layers.map_title, layers.games
+                )),
+                TextFont {
+                    font_size: bevy::prelude::FontSize::Px(16.),
+                    ..default()
+                },
+                TextColor(text_color),
+            ));
+            legend.spawn((
+                Text::new("F1 to F4 show or hide a layer, ? at the top right explains the rest"),
+                TextFont {
+                    font_size: bevy::prelude::FontSize::Px(13.),
+                    ..default()
+                },
+                TextColor(muted),
+            ));
+            for (idx, layer) in layers.layers.iter().enumerate() {
+                let total: usize = layer.spots.iter().map(|spot| spot.count).sum();
+                legend
+                    .spawn(Node {
+                        display: Display::Flex,
+                        flex_direction: FlexDirection::Column,
+                        row_gap: px(2),
+                        ..default()
+                    })
+                    .with_children(|row| {
+                        row.spawn(Node {
+                            display: Display::Flex,
+                            flex_direction: FlexDirection::Row,
+                            align_items: AlignItems::Center,
+                            column_gap: px(8),
+                            ..default()
+                        })
+                        .with_children(|line| {
+                            line.spawn((
+                                Node {
+                                    width: px(14),
+                                    height: px(14),
+                                    border_radius: BorderRadius::all(px(3)),
+                                    ..default()
+                                },
+                                BackgroundColor(layer_color(&layer.kind)),
+                            ));
+                            line.spawn((
+                                Text::new(format!("F{}  {}  {total}", idx + 1, layer.label)),
+                                TextFont {
+                                    font_size: bevy::prelude::FontSize::Px(15.),
+                                    ..default()
+                                },
+                                TextColor(text_color),
+                            ));
+                            line.spawn((
+                                Text::new("shown"),
+                                LayerState(idx),
+                                TextFont {
+                                    font_size: bevy::prelude::FontSize::Px(13.),
+                                    ..default()
+                                },
+                                TextColor(muted),
+                            ));
+                        });
+                        row.spawn((
+                            Text::new(layer.description.clone()),
+                            TextFont {
+                                font_size: bevy::prelude::FontSize::Px(13.),
+                                ..default()
+                            },
+                            TextColor(muted),
+                            Node {
+                                margin: UiRect::left(px(22)),
+                                ..default()
+                            },
+                        ));
+                    });
+            }
+        });
 }
 
 #[cfg(test)]

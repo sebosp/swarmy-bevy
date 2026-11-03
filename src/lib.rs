@@ -1,6 +1,8 @@
 use bevy::gltf::GltfMaterial;
 use bevy::prelude::*;
 pub mod error;
+pub mod help_ui;
+pub mod view_settings;
 pub use error::*;
 
 pub use s2protocol::cache_handles::document_header::*;
