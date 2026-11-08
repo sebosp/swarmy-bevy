@@ -15,7 +15,10 @@ use crate::t3_terrain::T3TerrainResource;
 use crate::utils;
 
 #[derive(Default, Reflect, GizmoConfigGroup)]
-pub struct MapPlugin;
+pub struct MapPlugin {
+    /// Starts with the graphics of the map caches shown, see [`crate::map_graphics`].
+    pub map_graphics: bool,
+}
 
 impl Plugin for MapPlugin {
     fn build(&self, app: &mut App) {
@@ -45,6 +48,16 @@ impl Plugin for MapPlugin {
             t3_terrain::load_t3_terrain
                 .run_if(has_map)
                 .run_if(resource_exists::<T3TerrainResource>),
+        );
+        app.insert_resource(crate::map_graphics::MapGraphicsState {
+            enabled: self.map_graphics,
+            loaded: false,
+        });
+        app.add_systems(
+            Update,
+            crate::map_graphics::load_map_graphics
+                .run_if(has_map)
+                .run_if(resource_exists::<t3_height_map::T3HeightMapResource>),
         );
         app.add_systems(Update, utils::update_gizmo_config);
         app.add_systems(Startup, show_map_title);

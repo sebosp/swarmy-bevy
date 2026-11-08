@@ -54,6 +54,9 @@ pub struct Args {
     /// games of the map, drawn as bars. swarmy writes it from "Map lessons" in Map Details.
     #[arg(long, value_name = "FILE", requires = "map_cache_ids")]
     pub map_layers: Option<String>,
+    /// Starts with the models and textures of the map caches shown, as in the View menu.
+    #[arg(long)]
+    pub map_graphics: bool,
     /// Saves a screenshot to this PNG file once the map is drawn and exits.
     #[arg(long, value_name = "FILE")]
     pub screenshot: Option<String>,

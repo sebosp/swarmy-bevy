@@ -4286,9 +4286,9 @@ dependencies = [
 
 [[package]]
 name = "nom-mpq"
-version = "2.0.12"
+version = "2.0.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b2c659c6278e787541623aeefa16b78c305681f5abb9e21b7dec1bdb9291e4e9"
+checksum = "83539f6661d8e50e389759455b0b80e9855737d22eb9ff7152e9faa6f3eb11f1"
 dependencies = [
  "bzip2-rs",
  "convert_case 0.12.0",
@@ -5376,9 +5376,9 @@ dependencies = [
 
 [[package]]
 name = "s2protocol"
-version = "5.0.2"
+version = "5.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "39d380d32891565ecbc63f7f16bd54da9802e070fa048860e43de6181c99c99c"
+checksum = "3205bee000886609ac1cb47fb42d130255b2ec1b52b11b4808e0657c8eb645be"
 dependencies = [
  "chrono",
  "colored",
@@ -5722,7 +5722,7 @@ checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
 
 [[package]]
 name = "swarmy-bevy"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "bevy",
  "bevy_skein",

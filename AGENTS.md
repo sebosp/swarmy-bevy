@@ -38,6 +38,10 @@ change, briefly.
   of the units of a bar; it never covers the buttons at the top right.
 - A cell has one bar per player with units there at the current time: alone, a bar takes the
   whole cell.
+- The View menu's Enable Map Graphics draws the models the map stores in its caches, placed by its
+  `Objects` file on top of the terrain (`map_graphics`, `s2protocol::cache_handles::graphics`). Off
+  by default and read when first enabled, unlit, with shared meshes and materials. Models and
+  textures of the game itself are not in the caches: no model is drawn, or it is gray.
 - `--screenshot <file>` renders and exits, to check a change without a display (Xvfb and
   lavapipe in a container work).
 

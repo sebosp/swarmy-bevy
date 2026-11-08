@@ -51,6 +51,13 @@ pub fn help_text(context: &HelpContext) -> String {
         "  Right drag: look around, the wheel changes the speed".to_string(),
         "  M: lock or unlock the mouse".to_string(),
         String::new(),
+        "View menu".to_string(),
+        "  Enable Map Graphics: the models and textures stored with the map, where the map"
+            .to_string(),
+        "  places them. Models of the game itself are not stored there and are not drawn,"
+            .to_string(),
+        "  gray models use a texture of the game.".to_string(),
+        String::new(),
         "Keys".to_string(),
     ];
     if let Some(layers) = context.layers {
