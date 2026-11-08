@@ -61,20 +61,34 @@ fn main() {
             .insert_resource(ReplayStartSeconds(args.replay_seconds))
             .add_plugins(ReplayPlugin);
     }
+    // A window out of sight waits for the display forever, a screenshot must not.
+    let present_mode = if args.screenshot.is_some() {
+        bevy::window::PresentMode::AutoNoVsync
+    } else {
+        bevy::window::PresentMode::default()
+    };
     app.insert_resource(CliParams { path, ids })
         .insert_resource(ScreenshotParams {
             path: args.screenshot,
         })
         .init_gizmo_group::<swarmy_bevy::utils::MyRoundGizmos>()
         .add_plugins((
-            DefaultPlugins,
+            DefaultPlugins.set(WindowPlugin {
+                primary_window: Some(Window {
+                    present_mode,
+                    ..default()
+                }),
+                ..default()
+            }),
             EmbeddedAssetsPlugin,
             FeathersPlugins,
             SkeinPlugin::default(),
             FreeCameraPlugin,
             swarmy_bevy::view_settings::ViewSettingsPlugin,
             swarmy_bevy::help_ui::HelpUiPlugin,
-            swarmy_bevy::map_plugin::MapPlugin,
+            swarmy_bevy::map_plugin::MapPlugin {
+                map_graphics: args.map_graphics,
+            },
             MeshPickingPlugin,
             swarmy_bevy::screenshot::ScreenshotPlugin,
         ))

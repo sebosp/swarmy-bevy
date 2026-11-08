@@ -11,6 +11,7 @@ use bevy::ui_widgets::{Activate, ValueChange};
 use crate::SelectedObjectName;
 use crate::cache_objects::doodas::ObjectDoodadComponent;
 use crate::cache_objects::{ObjectPointComponent, ObjectUnitComponent};
+use crate::map_graphics::{MapGraphicComponent, MapGraphicsState};
 use crate::t3_terrain::RampComponent;
 
 /// Allows a component to be observed for click events and show display information on a text feather.
@@ -222,6 +223,11 @@ fn main_feather_menu() -> impl Scene {
                                 query: Query<Entity, (With<RampComponent>, Allow<Disabled>)>, | {
                                 toggle_entities(value_change, commands, query)
                             })
+                            --
+                            @FeathersCheckbox {
+                                @caption: bsn! { Text("Enable Map Graphics") ThemedText }
+                            }
+                            on(toggle_map_graphics)
                 --
                 @FeathersMenuDivider
                 --
@@ -231,6 +237,17 @@ fn main_feather_menu() -> impl Scene {
             ]
         ]
     }
+}
+
+/// Shows or hides the models and textures of the map caches, they are read the first time.
+fn toggle_map_graphics(
+    value_change: On<ValueChange<bool>>,
+    commands: Commands,
+    query: Query<Entity, (With<MapGraphicComponent>, Allow<Disabled>)>,
+    mut state: ResMut<MapGraphicsState>,
+) {
+    state.enabled = value_change.value;
+    toggle_entities(value_change, commands, query);
 }
 
 /// Shows or hides the entities of a View menu checkbox, the hidden entities are disabled.
