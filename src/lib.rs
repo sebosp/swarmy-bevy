@@ -10,19 +10,22 @@ pub use s2protocol::cache_handles::map::coords::*;
 pub use s2protocol::cache_handles::map_info::*;
 pub use s2protocol::cache_handles::t3_height_map::*;
 
+pub mod baked_light;
 pub mod cache_objects;
 pub mod cli;
 pub mod document_header;
 pub mod embedded_assets;
+pub mod geyser_gas;
+pub mod helipad;
 pub mod map_graphics;
 pub mod map_info;
-pub mod map_layers;
+pub mod minerals;
 pub mod replay;
 pub mod screenshot;
-pub mod siege_spots;
 pub mod swarmy_feathers;
 pub mod t3_height_map;
 pub mod t3_terrain;
+pub mod terrain_textures;
 pub mod utils;
 
 pub mod map_plugin;

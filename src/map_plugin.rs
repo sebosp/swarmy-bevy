@@ -60,6 +60,12 @@ impl Plugin for MapPlugin {
                 .run_if(resource_exists::<t3_height_map::T3HeightMapResource>),
         );
         app.add_systems(Update, utils::update_gizmo_config);
+        app.add_systems(Update, t3_height_map::lift_with_e);
+        app.add_plugins((
+            crate::geyser_gas::GeyserGasPlugin,
+            crate::minerals::MineralsPlugin,
+            crate::helipad::HelipadPlugin,
+        ));
         app.add_systems(Startup, show_map_title);
     }
 }
@@ -226,13 +232,12 @@ pub fn load_cache_depot_map_resources(
             } else {
                 t3_height_map.data.clone()
             };
-            let t3_height_map_res = T3HeightMapResource {
+            let mut t3_height_map_res = T3HeightMapResource {
                 data,
                 levels: t3_height_map.data,
                 width: t3_height_map.width,
                 height: t3_height_map.height,
             };
-            commands.insert_resource(t3_height_map_res);
             let map_info_res = MapInfoResource::from(map_cache.map_info);
             commands.insert_resource(map_info_res);
             let mut document_header = map_cache.document_header.clone();
@@ -260,10 +265,18 @@ pub fn load_cache_depot_map_resources(
             match T3TerrainResource::try_from(map_cache.t3_terrain) {
                 Ok(t3_terrain_res) => {
                     tracing::info!("{} ramps", t3_terrain_res.ramp_list.len());
+                    // The ramps are slopes drawn over the ground, the cubes under them are low.
+                    if replay.is_none() {
+                        t3_terrain::lower_ground_under_ramps(
+                            &t3_terrain_res,
+                            &mut t3_height_map_res,
+                        );
+                    }
                     commands.insert_resource(t3_terrain_res);
                 }
                 Err(err) => tracing::warn!("Unable to read the ramps: {err:?}"),
             }
+            commands.insert_resource(t3_height_map_res);
             let document_header_res = DocumentHeaderResource::from(document_header);
             commands.insert_resource(document_header_res);
             let placed_objects = map_cache.placed_objects;

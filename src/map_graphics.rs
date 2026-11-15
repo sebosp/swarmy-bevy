@@ -1,11 +1,19 @@
 //! The models and textures a map carries in its caches, drawn where the `Objects` file places them,
 //! on top of the terrain. They are read the first time they are enabled in the View menu: the
 //! window stays light for the ones who do not use them.
+//!
+//! A model often uses a texture of the game, not in the caches: it is then drawn with a Poly
+//! Haven texture of the same kind (rock, grass...), by the words of the texture's name; the flat
+//! quads (decals, planes of a single image) are not drawn without their image. The models are
+//! unlit, with a light baked in their vertex colors so that their shapes read.
 
 use crate::MAP_SCALE_FACTOR;
+use crate::baked_light::bake_smooth_light;
 use crate::cli::CliParams;
 use crate::swarmy_feathers::{DisplayInfoOnClick, update_info_on_click};
 use crate::t3_height_map::{T3HeightMapResource, terrain_top};
+use crate::terrain_textures::materials::ground_kind;
+use crate::terrain_textures::polyhaven;
 use bevy::asset::RenderAssetUsages;
 use bevy::image::{
     CompressedImageFormats, ImageAddressMode, ImageSampler, ImageSamplerDescriptor, ImageType,
@@ -18,8 +26,10 @@ use std::collections::HashMap;
 
 /// Cutouts such as leaves are drawn with holes, the rest of a texture is opaque.
 const ALPHA_CUTOFF: f32 = 0.3;
-/// The gray of a model whose texture is one of the game's, not in the caches.
-const MISSING_TEXTURE_GRAY: f32 = 0.45;
+
+/// A region of at most this many triangles with a texture of the game is a flat quad (a decal, a
+/// plane with an image): nothing to see without its image, it is not drawn.
+const MAX_QUAD_TRIANGLES: usize = 2;
 
 /// An entity drawn from a model of the map caches.
 #[derive(Component, Default, Reflect, Debug)]
@@ -67,60 +77,77 @@ pub fn region_geometry(model: &M3Model, region: &M3Region) -> RegionGeometry {
 }
 
 fn region_mesh(geometry: RegionGeometry) -> Mesh {
-    Mesh::new(
-        PrimitiveTopology::TriangleList,
-        RenderAssetUsages::default(),
+    bake_smooth_light(
+        Mesh::new(
+            PrimitiveTopology::TriangleList,
+            RenderAssetUsages::default(),
+        )
+        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, geometry.positions)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, geometry.normals)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, geometry.uvs)
+        .with_inserted_indices(Indices::U32(geometry.indices)),
     )
-    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, geometry.positions)
-    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, geometry.normals)
-    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, geometry.uvs)
-    .with_inserted_indices(Indices::U32(geometry.indices))
 }
 
-/// The material of a texture path, None for the regions without one. They are shared, and unlit
-/// so that the images are readable wherever the camera goes.
+/// Whether a region is drawn: with its texture, or big enough to show its shape without it.
+pub fn is_region_drawn(texture_found: bool, triangles: usize) -> bool {
+    texture_found || triangles > MAX_QUAD_TRIANGLES
+}
+
+/// An image from its bytes, its texture repeated.
+fn decode_image(bytes: &[u8], extension: &str, formats: CompressedImageFormats) -> Option<Image> {
+    Image::from_buffer(
+        bytes,
+        ImageType::Extension(extension),
+        formats,
+        true,
+        ImageSampler::Descriptor(ImageSamplerDescriptor {
+            address_mode_u: ImageAddressMode::Repeat,
+            address_mode_v: ImageAddressMode::Repeat,
+            ..ImageSamplerDescriptor::linear()
+        }),
+        RenderAssetUsages::default(),
+    )
+    .inspect_err(|err| tracing::warn!("Unable to decode a texture ({extension}): {err:?}"))
+    .ok()
+}
+
+/// The material of a texture path: its image in the caches, else a Poly Haven texture of the same
+/// kind (a gray one when it cannot be downloaded). They are shared, and unlit so that the images
+/// are readable wherever the camera goes.
 fn graphic_material(
     texture: Option<&String>,
     graphics: &MapGraphics,
     images: &mut Assets<Image>,
 ) -> StandardMaterial {
-    let image = texture.and_then(|path| {
+    let cached = texture.and_then(|path| {
         let dds = graphics.textures.get(&normalized_path(path))?;
-        Image::from_buffer(
-            dds,
-            ImageType::Extension("dds"),
-            CompressedImageFormats::BC,
-            true,
-            ImageSampler::Descriptor(ImageSamplerDescriptor {
-                address_mode_u: ImageAddressMode::Repeat,
-                address_mode_v: ImageAddressMode::Repeat,
-                ..ImageSamplerDescriptor::linear()
-            }),
-            RenderAssetUsages::default(),
-        )
-        .inspect_err(|err| tracing::warn!("Unable to decode the texture {path}: {err:?}"))
-        .ok()
+        decode_image(dds, "dds", CompressedImageFormats::BC)
     });
-    let has_image = image.is_some();
+    let (image, alpha_mode, base_color) = match cached {
+        Some(image) => (Some(image), AlphaMode::Mask(ALPHA_CUTOFF), Color::WHITE),
+        None => {
+            let kind = ground_kind(texture.map_or("", String::as_str), None);
+            let [r, g, b] = kind.default_color();
+            let image = polyhaven::diffuse_jpg(kind.polyhaven_id())
+                .inspect_err(|err| tracing::warn!("No texture for {texture:?}: {err}"))
+                .ok()
+                .and_then(|jpg| decode_image(&jpg, "jpg", CompressedImageFormats::NONE));
+            let color = if image.is_some() {
+                Color::WHITE
+            } else {
+                Color::srgb_u8(r, g, b)
+            };
+            (image, AlphaMode::Opaque, color)
+        }
+    };
     StandardMaterial {
-        base_color: if has_image {
-            Color::WHITE
-        } else {
-            Color::srgb(
-                MISSING_TEXTURE_GRAY,
-                MISSING_TEXTURE_GRAY,
-                MISSING_TEXTURE_GRAY,
-            )
-        },
+        base_color,
         base_color_texture: image.map(|image| images.add(image)),
         unlit: true,
         double_sided: true,
         cull_mode: None,
-        alpha_mode: if has_image {
-            AlphaMode::Mask(ALPHA_CUTOFF)
-        } else {
-            AlphaMode::Opaque
-        },
+        alpha_mode,
         ..default()
     }
 }
@@ -156,6 +183,13 @@ pub fn load_map_graphics(
         let parts = model
             .regions
             .iter()
+            .filter(|region| {
+                let found = region
+                    .diffuse
+                    .as_deref()
+                    .is_some_and(|path| graphics.textures.contains_key(&normalized_path(path)));
+                is_region_drawn(found, region.indices.len() / 3)
+            })
             .map(|region| {
                 let material = shared_materials
                     .entry(region.diffuse.as_deref().map(normalized_path))
@@ -231,6 +265,13 @@ mod tests {
         assert_eq!(geometry.positions[0], [2., 3., 1.]);
         assert_eq!(geometry.normals[0], [0., 1., 0.]);
         assert_eq!(geometry.positions.len(), 3);
+    }
+
+    #[test]
+    fn it_draws_the_quads_only_with_their_image() {
+        assert!(!is_region_drawn(false, 2));
+        assert!(is_region_drawn(true, 2));
+        assert!(is_region_drawn(false, 150));
     }
 
     #[test]

@@ -13,6 +13,7 @@ use crate::cache_objects::doodas::ObjectDoodadComponent;
 use crate::cache_objects::{ObjectPointComponent, ObjectUnitComponent};
 use crate::map_graphics::{MapGraphicComponent, MapGraphicsState};
 use crate::t3_terrain::RampComponent;
+use crate::terrain_textures::{TerrainTexturesCheckbox, TerrainTexturesState};
 
 /// Allows a component to be observed for click events and show display information on a text feather.
 #[derive(Component)]
@@ -228,12 +229,12 @@ fn main_feather_menu() -> impl Scene {
                                 @caption: bsn! { Text("Enable Map Graphics") ThemedText }
                             }
                             on(toggle_map_graphics)
-                --
-                @FeathersMenuDivider
-                --
-                @FeathersMenuItem {
-                    @caption: bsn! { Text("Second section") ThemedText }
-                }
+                            --
+                            @FeathersCheckbox {
+                                @caption: bsn! { Text("Terrain Textures") ThemedText }
+                            }
+                            TerrainTexturesCheckbox
+                            on(toggle_terrain_textures)
             ]
         ]
     }
@@ -248,6 +249,20 @@ fn toggle_map_graphics(
 ) {
     state.enabled = value_change.value;
     toggle_entities(value_change, commands, query);
+}
+
+/// Paints the terrain with its textures or in its colors, they are read the first time.
+fn toggle_terrain_textures(
+    value_change: On<ValueChange<bool>>,
+    mut commands: Commands,
+    mut state: ResMut<TerrainTexturesState>,
+) {
+    state.enabled = value_change.value;
+    if value_change.value {
+        commands.entity(value_change.source).insert(Checked);
+    } else {
+        commands.entity(value_change.source).remove::<Checked>();
+    }
 }
 
 /// Shows or hides the entities of a View menu checkbox, the hidden entities are disabled.

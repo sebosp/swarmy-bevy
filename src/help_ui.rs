@@ -1,9 +1,7 @@
 //! The buttons at the top right of the window: Help, what the keys do, what the colors mean and
 //! how to move on the map, and Settings, the size of the text and of the panels.
 
-use crate::map_layers::{MapLayers, layer_color_name};
 use crate::replay::ReplayData;
-use crate::siege_spots::SiegeSpots;
 use crate::view_settings::ViewSettings;
 use bevy::feathers::controls::*;
 use bevy::feathers::theme::{ThemeBackgroundColor, ThemedText};
@@ -37,9 +35,7 @@ impl Plugin for HelpUiPlugin {
 }
 
 /// What the window shows, for the text of Help.
-pub struct HelpContext<'a> {
-    pub layers: Option<&'a MapLayers>,
-    pub siege_spots: bool,
+pub struct HelpContext {
     pub replay: bool,
 }
 
@@ -47,29 +43,35 @@ pub struct HelpContext<'a> {
 pub fn help_text(context: &HelpContext) -> String {
     let mut lines = vec![
         "Moving on the map".to_string(),
-        "  W A S D: move, Shift to go faster, E and Q: up and down".to_string(),
+        "  W A S D: move, Shift to go faster, Space (or E): up, Q: down".to_string(),
         "  Right drag: look around, the wheel changes the speed".to_string(),
         "  M: lock or unlock the mouse".to_string(),
         String::new(),
         "View menu".to_string(),
         "  Enable Map Graphics: the models and textures stored with the map, where the map"
             .to_string(),
-        "  places them. Models of the game itself are not stored there and are not drawn,"
+        "  places them. Models of the game itself are not stored there and are not drawn; a"
             .to_string(),
-        "  gray models use a texture of the game.".to_string(),
+        "  texture of the game is drawn as a free one of the same kind (rock, grass...), and"
+            .to_string(),
+        "  the flat images (decals) without theirs are left out.".to_string(),
+        "  Terrain Textures: the ground painted with the textures of the map: the weights the"
+            .to_string(),
+        "  map gives to each of its 8 textures at each point, each texture drawn as a free one"
+            .to_string(),
+        "  of the same kind (grass, dirt, rock...) tinted with its color in the minimap. On for a"
+            .to_string(),
+        "  map, off for a replay. The geysers and the ore of the minerals are then of rock."
+            .to_string(),
+        "  Textures: Poly Haven (polyhaven.com), CC0.".to_string(),
+        "  The mineral fields are ores with glowing crystals, blue (gold the rich ones), that"
+            .to_string(),
+        "  twinkle; the geysers have a green vent puffing their gas; the start locations are"
+            .to_string(),
+        "  landing pads with lights running around them.".to_string(),
         String::new(),
         "Keys".to_string(),
     ];
-    if let Some(layers) = context.layers {
-        for (idx, layer) in layers.layers.iter().enumerate() {
-            lines.push(format!(
-                "  F{}: show or hide {} ({})",
-                idx + 1,
-                layer.label.to_lowercase(),
-                layer_color_name(&layer.kind),
-            ));
-        }
-    }
     if context.replay {
         lines.push(
             "  Left and Right arrows: back and forward in time, Home and End: start and end"
@@ -84,31 +86,13 @@ pub fn help_text(context: &HelpContext) -> String {
         String::new(),
         "Colors".to_string(),
     ]);
-    if context.layers.is_some() || context.siege_spots || context.replay {
+    if context.replay {
         lines.push(
             "  The terrain is in grays, darker the lower, so that the bars stand out".to_string(),
         );
     } else {
         lines.push(
-            "  The terrain by level: black the lowest, then light blue, light yellow, green and dark red the highest; the ramps in amber".to_string(),
-        );
-    }
-    if let Some(layers) = context.layers {
-        lines.push(format!(
-            "  Map lessons of {} games: a bar per spot of {}x{} cells, as high as its count against the spot with the most of its layer",
-            layers.games, layers.spot_cells, layers.spot_cells,
-        ));
-        for layer in &layers.layers {
-            lines.push(format!(
-                "    {}: {}",
-                layer_color_name(&layer.kind),
-                layer.description,
-            ));
-        }
-    }
-    if context.siege_spots {
-        lines.push(
-            "  Siege Tank spots: a bar per spot where tanks sieged, as high as the enemy units they killed there; yellow few kills per siege, red the most".to_string(),
+            "  The terrain by level (Terrain Textures off): black the lowest, then light blue, light yellow, green and dark red the highest; the ramps in amber".to_string(),
         );
     }
     if context.replay {
@@ -125,15 +109,8 @@ pub fn help_text(context: &HelpContext) -> String {
     lines.join("\n")
 }
 
-fn write_help(
-    mut text: Single<&mut Text, With<HelpText>>,
-    layers: Option<Res<MapLayers>>,
-    siege_spots: Option<Res<SiegeSpots>>,
-    replay: Option<Res<ReplayData>>,
-) {
+fn write_help(mut text: Single<&mut Text, With<HelpText>>, replay: Option<Res<ReplayData>>) {
     text.0 = help_text(&HelpContext {
-        layers: layers.as_deref(),
-        siege_spots: siege_spots.is_some(),
         replay: replay.is_some(),
     });
 }
@@ -293,7 +270,7 @@ fn toolbar() -> impl SceneList {
                 on(default_text)
             ]
             --
-            Text("Also Ctrl+= and Ctrl+-, Ctrl+0 for the default. Kept for the next time.") ThemedText
+            Text("Also Ctrl+= and Ctrl+-, Ctrl+0 for the default.") ThemedText
             TextFont {
                 font_size: bevy::prelude::FontSize::Px(12.),
             }
@@ -307,27 +284,11 @@ mod tests {
 
     #[test]
     fn it_explains_the_keys_and_colors_of_what_is_shown() {
-        let layers: MapLayers = serde_json::from_str(
-            r#"{"map_title":"Pylon LE","spot_cells":4,"games":109,"layers":[
-            {"kind":"fights","label":"Fights","description":"Where units died","spots":[]},
-            {"kind":"proxies","label":"Proxies","description":"Buildings near the enemy","spots":[]}]}"#,
-        )
-        .unwrap();
-        let text = help_text(&HelpContext {
-            layers: Some(&layers),
-            siege_spots: false,
-            replay: false,
-        });
-        assert!(text.contains("F1: show or hide fights (red)"));
-        assert!(text.contains("F2: show or hide proxies (blue)"));
-        assert!(text.contains("in grays"));
-        assert!(!text.contains("Left and Right arrows"));
-        let map = help_text(&HelpContext {
-            layers: None,
-            siege_spots: false,
-            replay: false,
-        });
+        let replay = help_text(&HelpContext { replay: true });
+        assert!(replay.contains("in grays"));
+        assert!(replay.contains("Left and Right arrows"));
+        let map = help_text(&HelpContext { replay: false });
         assert!(map.contains("ramps in amber"));
-        assert!(!map.contains("F1"));
+        assert!(!map.contains("Left and Right arrows"));
     }
 }

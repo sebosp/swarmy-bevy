@@ -3,9 +3,11 @@
 use super::t3_height_map::T3HeightMapResource;
 use crate::MAP_SCALE_FACTOR;
 use crate::MapScene;
+use crate::helipad::{HelipadAssets, PAD_THICKNESS, add_pad_markings};
+use crate::minerals::{Crystal, MineralAssets, crystals_of_field};
 use crate::standard_material_from_gltf_material;
 use crate::swarmy_feathers::{DisplayInfoOnClick, update_info_on_click};
-use crate::t3_height_map::CELL_HEIGHT_MULTIPLIER;
+use crate::t3_height_map::{CELL_HEIGHT_MULTIPLIER, terrain_top};
 use bevy::gltf::GltfMaterial;
 use bevy::prelude::*;
 
@@ -18,6 +20,19 @@ pub const DESTRUCTIBLE_ROCKS_HEIGHT: f32 = 5.0;
 pub const DESTRUCTIBLE_ROCKS_RADIUS: f32 = 5.0;
 
 pub const UNKNOWN_OBJECT_SIZE: f32 = 1.0;
+
+/// A geyser covers 3x3 cells, as in the game, in cells. The mineral fields are in
+/// [`crate::minerals`].
+pub const GEYSER_SIZE: [f32; 3] = [3.0, 0.6, 3.0];
+
+/// The rock painted with a texture when the terrain is (see [`crate::terrain_textures`]): the
+/// geysers and the ore of the mineral fields.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RockTexture;
+
+/// The gas of a geyser: a glowing green vent on its top.
+#[derive(Component, Default)]
+pub struct GeyserGas;
 
 // Testing Object Points.
 pub const NO_FLY_ZONE_HEIGHT: f32 = 25.0;
@@ -206,6 +221,8 @@ pub fn load_cache_objects(
     gltf_materials: Res<Assets<GltfMaterial>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     placed_objects: Res<PlacedObjectsResource>,
+    minerals: Res<MineralAssets>,
+    helipads: Res<HelipadAssets>,
     mut loaded: Local<bool>,
 ) -> Result<(), BevyError> {
     // Only do this once
@@ -229,6 +246,18 @@ pub fn load_cache_objects(
         MAP_SCALE_FACTOR,
         MAP_SCALE_FACTOR,
     ))));
+    let geyser_mesh = Mesh3d(meshes.add(Cuboid::from_size(
+        Vec3::from_array(GEYSER_SIZE) * MAP_SCALE_FACTOR,
+    )));
+    let gas_mesh = Mesh3d(meshes.add(Cylinder::new(
+        GEYSER_SIZE[0] * 0.3 * MAP_SCALE_FACTOR,
+        0.04 * MAP_SCALE_FACTOR,
+    )));
+    let gas_material = MeshMaterial3d(materials.add(StandardMaterial {
+        base_color: Color::srgb(0.25, 0.9, 0.35),
+        emissive: LinearRgba::rgb(0.3, 2.0, 0.5),
+        ..default()
+    }));
     let xel_naga_mesh = Mesh3d(meshes.add(Cylinder::new(
         XEL_NAGA_TOWER_RADIUS * MAP_SCALE_FACTOR,
         XEL_NAGA_TOWER_HEIGHT * MAP_SCALE_FACTOR,
@@ -279,6 +308,28 @@ pub fn load_cache_objects(
             cell_height as f32 * CELL_HEIGHT_MULTIPLIER * MAP_SCALE_FACTOR,
             MAP_SCALE_FACTOR * x,
         );
+        // The mineral fields and geysers stand on the terrain.
+        let on_terrain = |height: f32| {
+            Transform::from_xyz(
+                MAP_SCALE_FACTOR * y,
+                terrain_top(cell_height as f32) + height * 0.5 * MAP_SCALE_FACTOR,
+                MAP_SCALE_FACTOR * x,
+            )
+        };
+        // The ore of a mineral field is half in the ground, its crystals grow out of it.
+        let field_transform = on_terrain(0.);
+        let field = |crystal: Crystal| {
+            (
+                RockTexture,
+                Mesh3d(minerals.ore_mesh.clone()),
+                MeshMaterial3d(minerals.ore_material.clone()),
+                field_transform,
+                Children::spawn(SpawnIter(
+                    crystals_of_field(&minerals, crystal, field_transform.translation).into_iter(),
+                )),
+            )
+        };
+        let geyser_transform = on_terrain(GEYSER_SIZE[1]);
         let xel_naga_transform = Transform::from_xyz(
             MAP_SCALE_FACTOR * y,
             XEL_NAGA_TOWER_HEIGHT * 0.5 * MAP_SCALE_FACTOR,
@@ -290,47 +341,56 @@ pub fn load_cache_objects(
             MAP_SCALE_FACTOR * x,
         );
         let mut spawned = match unit.unit_kind.as_ref() {
-            "RichMineralField750" => commands.spawn((
-                RichMineralField750Material,
-                mineral_mesh.clone(),
-                unit_material,
-                mineral_transform,
-            )),
-            "RichMineralField" => commands.spawn((
-                RichMineralFieldMaterial,
-                mineral_mesh.clone(),
-                unit_material,
-                mineral_transform,
-            )),
-            "MineralField750" => commands.spawn((
-                MineralField750Material,
-                mineral_mesh.clone(),
-                unit_material,
-                mineral_transform,
-            )),
-            "MineralField" => commands.spawn((
-                MineralFieldMaterial,
-                mineral_mesh.clone(),
-                unit_material,
-                mineral_transform,
-            )),
+            "RichMineralField750" => {
+                commands.spawn((RichMineralField750Material, field(Crystal::Gold)))
+            }
+            "RichMineralField" => commands.spawn((RichMineralFieldMaterial, field(Crystal::Gold))),
+            "MineralField750" => commands.spawn((MineralField750Material, field(Crystal::Blue))),
+            "MineralField" => commands.spawn((MineralFieldMaterial, field(Crystal::Blue))),
             "RichVespeneGeyser" => commands.spawn((
                 RichVespeneGeyserMaterial,
-                mineral_mesh.clone(),
+                RockTexture,
+                geyser_mesh.clone(),
                 unit_material,
-                mineral_transform,
+                geyser_transform,
+                children![(
+                    GeyserGas,
+                    ObjectUnitComponent,
+                    gas_mesh.clone(),
+                    gas_material.clone(),
+                    Transform::from_xyz(0., GEYSER_SIZE[1] * 0.5 * MAP_SCALE_FACTOR, 0.),
+                    Pickable::IGNORE,
+                )],
             )),
             "VespeneGeyser" => commands.spawn((
                 VespeneGeyserMaterial,
-                mineral_mesh.clone(),
+                RockTexture,
+                geyser_mesh.clone(),
                 unit_material,
-                mineral_transform,
+                geyser_transform,
+                children![(
+                    GeyserGas,
+                    ObjectUnitComponent,
+                    gas_mesh.clone(),
+                    gas_material.clone(),
+                    Transform::from_xyz(0., GEYSER_SIZE[1] * 0.5 * MAP_SCALE_FACTOR, 0.),
+                    Pickable::IGNORE,
+                )],
             )),
             "SpacePlatformGeyser" => commands.spawn((
                 SpacePlatformGeyserMaterial,
-                mineral_mesh.clone(),
+                RockTexture,
+                geyser_mesh.clone(),
                 unit_material,
-                mineral_transform,
+                geyser_transform,
+                children![(
+                    GeyserGas,
+                    ObjectUnitComponent,
+                    gas_mesh.clone(),
+                    gas_material.clone(),
+                    Transform::from_xyz(0., GEYSER_SIZE[1] * 0.5 * MAP_SCALE_FACTOR, 0.),
+                    Pickable::IGNORE,
+                )],
             )),
             "XelNagaTower" => commands.spawn((
                 XelNagaTowerMaterial,
@@ -408,7 +468,6 @@ pub fn load_cache_objects(
             MeshMaterial3d(materials.add(standard_material_from_gltf_material(unit_gltf_material)));
         let pathing_radius_soft = object_point.pathing_radius_soft;
         let _pathing_radius_hard = object_point.pathing_radius_hard;
-        let torus_mesh = Mesh3d(meshes.add(Torus::new(0.2, 0.25)));
         let cylinder_mesh = Mesh3d(meshes.add(Cylinder::new(
             pathing_radius_soft * NO_FLY_ZONE_RADIUS * MAP_SCALE_FACTOR,
             NO_FLY_ZONE_HEIGHT * MAP_SCALE_FACTOR,
@@ -427,12 +486,21 @@ pub fn load_cache_objects(
                 object_point_material,
                 cylinder_transform,
             )),
-            "StartLoc" => commands.spawn((
-                StartLocMaterial,
-                torus_mesh,
-                object_point_material,
-                cylinder_transform,
-            )),
+            "StartLoc" => {
+                // A landing pad on the ground, see [`crate::helipad`].
+                let mut pad = commands.spawn((
+                    StartLocMaterial,
+                    Mesh3d(helipads.pad_mesh.clone()),
+                    MeshMaterial3d(helipads.pad_material.clone()),
+                    Transform::from_xyz(
+                        MAP_SCALE_FACTOR * y,
+                        terrain_top(cell_height as f32) + PAD_THICKNESS * 0.5 * MAP_SCALE_FACTOR,
+                        MAP_SCALE_FACTOR * x,
+                    ),
+                ));
+                add_pad_markings(&mut pad, &helipads);
+                pad
+            }
             _ => commands.spawn((
                 UnknownObjectPointMaterial,
                 unknown_object_mesh.clone(),

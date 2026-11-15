@@ -2,15 +2,15 @@ use bevy::camera_controller::free_camera::FreeCameraPlugin;
 use bevy::feathers::dark_theme::create_dark_theme;
 use bevy::feathers::{FeathersPlugins, theme::UiTheme};
 use bevy::prelude::*;
+use bevy::winit::{UpdateMode, WinitSettings};
 use bevy_skein::SkeinPlugin;
 use clap::Parser;
+use std::time::Duration;
 use swarmy_bevy::MapScene;
 use swarmy_bevy::cli::*;
 use swarmy_bevy::embedded_assets::{EmbeddedAssetsPlugin, SWARMY_OBJECTS_GLTF};
-use swarmy_bevy::map_layers::{MapLayers, MapLayersPlugin};
 use swarmy_bevy::replay::ReplayData;
 use swarmy_bevy::replay::plugin::{ReplayPlugin, ReplayStartSeconds};
-use swarmy_bevy::siege_spots::{SiegeSpots, SiegeSpotsPlugin};
 
 fn main() {
     let args = Args::parse();
@@ -36,26 +36,9 @@ fn main() {
         (None, Some(ids)) => ids,
         (None, None) => unreachable!("has_map requires the map cache ids without a replay"),
     };
-    let siege_spots = args.siege_spots.as_deref().map(|path| {
-        SiegeSpots::load(path).unwrap_or_else(|err| {
-            eprintln!("Unable to read the siege spots {err}");
-            std::process::exit(1);
-        })
-    });
-    let map_layers = args.map_layers.as_deref().map(|path| {
-        MapLayers::load(path).unwrap_or_else(|err| {
-            eprintln!("Unable to read the map layers {err}");
-            std::process::exit(1);
-        })
-    });
+    // A replay keeps the terrain in grays, its bars stand out.
+    let terrain_textures = args.terrain_textures.unwrap_or(replay.is_none());
     let mut app = App::new();
-    if let Some(map_layers) = map_layers {
-        app.insert_resource(map_layers).add_plugins(MapLayersPlugin);
-    }
-    if let Some(siege_spots) = siege_spots {
-        app.insert_resource(siege_spots)
-            .add_plugins(SiegeSpotsPlugin);
-    }
     if let Some(replay) = replay {
         app.insert_resource(replay)
             .insert_resource(ReplayStartSeconds(args.replay_seconds))
@@ -66,6 +49,17 @@ fn main() {
         bevy::window::PresentMode::AutoNoVsync
     } else {
         bevy::window::PresentMode::default()
+    };
+    // At most 60 frames a second while the window has the focus (input wakes it up sooner), 10
+    // without it: the window had drawn as fast as the display (120 Hz and more on laptops), the
+    // fans of a laptop spun up. A screenshot draws as fast as it can.
+    let frame_rate = if args.screenshot.is_some() {
+        WinitSettings::continuous()
+    } else {
+        WinitSettings {
+            focused_mode: UpdateMode::reactive(Duration::from_secs_f64(1. / 60.)),
+            unfocused_mode: UpdateMode::reactive_low_power(Duration::from_secs_f64(1. / 10.)),
+        }
     };
     app.insert_resource(CliParams { path, ids })
         .insert_resource(ScreenshotParams {
@@ -89,10 +83,14 @@ fn main() {
             swarmy_bevy::map_plugin::MapPlugin {
                 map_graphics: args.map_graphics,
             },
+            swarmy_bevy::terrain_textures::TerrainTexturesPlugin {
+                enabled: terrain_textures,
+            },
             MeshPickingPlugin,
             swarmy_bevy::screenshot::ScreenshotPlugin,
         ))
         .insert_resource(UiTheme(create_dark_theme()))
+        .insert_resource(frame_rate)
         .add_systems(PreStartup, load_gltf)
         .run();
 }
