@@ -4,7 +4,7 @@
 
 MapInfo, T3 Height Map, Objects (Units such as XelNagaTowers, Doodas, UnitPoints such as StartLocations)
 
-![A map in swarmy-bevy: the terrain levels, ramps, resources and start locations](docs/map.png)
+![A map in swarmy-bevy: the terrain painted with its textures, resources and start locations](docs/map.png)
 
 ![A replay in swarmy-bevy: the units born and lost of each player over time](docs/replay.png)
 
@@ -49,7 +49,8 @@ The ramps of t3Terrain.xml are drawn with the ramp algorithm of
 [sc2-map-analyzer](https://github.com/sebosp/sc2-map-analyzer) (`SC2Map::processRamp`), ported in
 `src/t3_terrain/ramp_cells.rs`: from the direction and the `leftLo`/`rightLo` corners of each ramp,
 the cells across the ramp are walked from one corner to the other. The ramp cells (pathable, not
-buildable) are drawn in amber going up from the low ground to the high ground, the top row of the
+buildable) are drawn in amber as one slope from the low ground to the high ground (the levels a
+few cells down and up the ramp, the cubes under it are lowered), the top row of the
 straight ramps (pathable and buildable, where the walls are placed) in lime and the sides of the
 ramps (not pathable) in red.
 
@@ -58,6 +59,18 @@ ramps (not pathable) in red.
 The View menu shows or hides the ObjectDoodads, the ObjectUnits (mineral fields, geysers, rocks,
 towers), the ObjectPoints (start locations, no fly zones) and the ramps. Clicking on any of them
 shows its name in the Selection.
+
+Terrain Textures paints the ground with the textures of the map: the 8 textures `t3Terrain.xml`
+names and their weights at each point (`t3TextureMasks`). The textures of the game are not in the
+map caches, so each one is drawn with a free texture of the same kind of ground (grass, dirt, rock,
+tiles...) from [Poly Haven](https://polyhaven.com) (CC0), downloaded once into
+`~/.cache/swarmy-bevy/polyhaven` and tinted with the color of that texture in the minimap. On by
+default for a map, off for a replay; `--terrain-textures true|false` at the start. With it the
+geysers and the ore of the mineral fields are rock.
+
+The mineral fields are ores with glowing, twinkling crystals, blue (gold the rich ones), the geysers
+have a green vent puffing gas, and the start locations are landing pads with lights running around
+them.
 
 ### Screenshots
 
@@ -77,7 +90,6 @@ swarmy-bevy uses Bevy 0.20 and bevy_skein 0.7 (a release candidate, the first ve
 
 ## TODO:
 
-- Draw the ramps as sloped surfaces instead of tiles at each step.
 - The NoFlyZones should be removed and thoughts on making them toggled in a minimal UI.
 - A replay timeline slider instead of the 30 seconds steps, and the units alive at each time.
 - The most effective ability uses the last command of the killer unit, abilities like Psionic Storm

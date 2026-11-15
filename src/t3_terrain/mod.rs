@@ -181,12 +181,148 @@ fn x_y_to_vec2(x_str: &str, y_str: &str) -> Result<Vec2, BevySC2MapError> {
 #[reflect(Component, Default)]
 pub struct RampComponent;
 
-/// The thickness of the ramp tiles drawn on top of the terrain.
-pub const RAMP_TILE_THICKNESS: f32 = 0.2;
+/// How high above the terrain the ramp surface is drawn, so that it is not hidden in the cells.
+pub const RAMP_LIFT: f32 = 0.05;
 
-/// Draws the cells of each ramp as tiles going up from the low ground to the high ground, the
-/// ramp cells in amber, the buildable top row of the straight ramps in lime and the sides of the
-/// ramps, not pathable, in red, in grays for a replay.
+/// The cells away from a ramp cell, down and up the ramp, where its low and high ground are read.
+const GROUND_DISTANCE: i32 = 3;
+
+/// The low and high levels of a ramp: the most common level of the terrain a few cells down and
+/// up the ramp from its cells; the levels around a ramp may be of other plateaus.
+fn ramp_levels(
+    dir: &RampDirection,
+    cells: &[ramp_cells::RampCell],
+    height_map: &T3HeightMapResource,
+    flat: bool,
+) -> Option<(u8, u8)> {
+    let u = ramp_cells::up_vector(dir);
+    let mode = |offset: i32| {
+        let mut counts = [0usize; 256];
+        for cell in cells {
+            let IVec2 { x, y } = cell.cell + u * offset;
+            // The drawn heights of a replay are flat, else the levels: the drawn heights are
+            // lowered under the ramps.
+            let level = if flat {
+                height_map.height_at(x, y)
+            } else {
+                height_map.level_at(x, y)
+            };
+            if let Some(level) = level {
+                counts[level as usize] += 1;
+            }
+        }
+        let (level, count) = counts.iter().enumerate().max_by_key(|(_, count)| **count)?;
+        (*count > 0).then_some(level as u8)
+    };
+    let (low, high) = (mode(-GROUND_DISTANCE)?, mode(GROUND_DISTANCE)?);
+    Some((low.min(high), low.max(high)))
+}
+
+/// The surface of the cells of a ramp of one kind, each cell a quad whose corners are as high as
+/// they are far up the ramp: the ramp is a slope from its low edge to its high edge, not stairs.
+/// The positions are in the axes of the map (x, the height, z are the map's y, height and x).
+fn ramp_surface(
+    cells: &[IVec2],
+    up: Vec2,
+    (along_min, along_max): (f32, f32),
+    (low, high): (f32, f32),
+) -> Mesh {
+    let height = |corner: Vec2| {
+        let progress = if along_max > along_min {
+            ((corner.dot(up) - along_min) / (along_max - along_min)).clamp(0., 1.)
+        } else {
+            0.
+        };
+        low + (high - low) * progress + RAMP_LIFT * MAP_SCALE_FACTOR
+    };
+    let mut positions: Vec<[f32; 3]> = vec![];
+    let mut normals: Vec<[f32; 3]> = vec![];
+    let mut uvs: Vec<[f32; 2]> = vec![];
+    let mut indices: Vec<u32> = vec![];
+    for cell in cells {
+        let corners = [
+            cell.as_vec2(),
+            cell.as_vec2() + Vec2::X,
+            cell.as_vec2() + Vec2::ONE,
+            cell.as_vec2() + Vec2::Y,
+        ];
+        let points: Vec<Vec3> = corners
+            .iter()
+            .map(|corner| {
+                Vec3::new(
+                    corner.y * MAP_SCALE_FACTOR,
+                    height(*corner),
+                    corner.x * MAP_SCALE_FACTOR,
+                )
+            })
+            .collect();
+        let mut normal = (points[1] - points[0])
+            .cross(points[2] - points[0])
+            .normalize_or_zero();
+        let start = positions.len() as u32;
+        // The quad faces up.
+        let order: [u32; 6] = if normal.y >= 0. {
+            [0, 1, 2, 0, 2, 3]
+        } else {
+            normal = -normal;
+            [0, 2, 1, 0, 3, 2]
+        };
+        for (point, corner) in points.iter().zip(corners) {
+            positions.push(point.to_array());
+            normals.push(normal.to_array());
+            uvs.push(corner.to_array());
+        }
+        indices.extend(order.iter().map(|i| start + i));
+    }
+    Mesh::new(
+        bevy::mesh::PrimitiveTopology::TriangleList,
+        bevy::asset::RenderAssetUsages::default(),
+    )
+    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
+    .with_inserted_indices(bevy::mesh::Indices::U32(indices))
+}
+
+/// Lowers the terrain cubes under the ramps to the low level of their ramp, the ramp surface is
+/// drawn instead: a cube (centered on a point of the height map) is under a ramp when at least 3 of
+/// the 4 cells around its point are ramp cells. Only the drawn heights change, not the levels.
+pub fn lower_ground_under_ramps(terrain: &T3TerrainResource, height_map: &mut T3HeightMapResource) {
+    for ramp in &terrain.ramp_list {
+        let Some(cells) = ramp_cells::ramp_cells(&ramp.dir, ramp.left_lo, ramp.right_lo) else {
+            continue;
+        };
+        let Some((low, _)) = ramp_levels(&ramp.dir, &cells, height_map, false) else {
+            continue;
+        };
+        let in_ramp = |cell: IVec2| cells.iter().any(|ramp_cell| ramp_cell.cell == cell);
+        for ramp_cell in &cells {
+            for point in [
+                ramp_cell.cell,
+                ramp_cell.cell + IVec2::X,
+                ramp_cell.cell + IVec2::Y,
+                ramp_cell.cell + IVec2::ONE,
+            ] {
+                let around = [IVec2::ZERO, IVec2::NEG_X, IVec2::NEG_Y, IVec2::NEG_ONE]
+                    .iter()
+                    .filter(|offset| in_ramp(point + **offset))
+                    .count();
+                if around < 3 || point.x < 0 || point.y < 0 || point.x as usize >= height_map.width
+                {
+                    continue;
+                }
+                let index = point.y as usize * height_map.width + point.x as usize;
+                if let Some(height) = height_map.data.get_mut(index) {
+                    *height = (*height).min(low);
+                }
+            }
+        }
+    }
+}
+
+/// Draws each ramp as a slope from the low ground to the high ground: the ramp cells in amber, the
+/// buildable top row of the straight ramps in lime and the sides of the ramps, not pathable, in
+/// red, in grays for a replay.
 pub fn load_t3_terrain(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -195,20 +331,13 @@ pub fn load_t3_terrain(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut loaded: Local<bool>,
     replay: Option<Res<crate::replay::ReplayData>>,
-    overlays: crate::t3_height_map::Overlays,
 ) {
     if *loaded {
         return;
     }
     *loaded = true;
-    let tile_mesh = Mesh3d(meshes.add(Cuboid::from_size(Vec3::new(
-        MAP_SCALE_FACTOR,
-        RAMP_TILE_THICKNESS * MAP_SCALE_FACTOR,
-        MAP_SCALE_FACTOR,
-    ))));
-    // A replay, the map lessons and the siege spots are drawn in grays so that the ramps do not
-    // look like their bars.
-    let (ramp_color, top_color, edge_color) = if replay.is_some() || overlays.any() {
+    // A replay is drawn in grays so that the ramps do not look like its bars.
+    let (ramp_color, top_color, edge_color) = if replay.is_some() {
         (
             palettes::tailwind::STONE_400,
             palettes::tailwind::STONE_200,
@@ -229,49 +358,53 @@ pub fn load_t3_terrain(
             tracing::warn!("Ramp {ramp_ith} {:?}: the ramp algorithm failed", ramp.dir);
             continue;
         };
-        // The low and high ground around the ramp.
-        let heights: Vec<u8> = cells
+        let Some((low, high)) =
+            ramp_levels(&ramp.dir, &cells, &t3_height_map_res, replay.is_some())
+        else {
+            tracing::warn!("Ramp {ramp_ith} {:?}: no ground around it", ramp.dir);
+            continue;
+        };
+        // The slope goes from the lowest corners of the cells to the highest ones, up the ramp.
+        let up = ramp_cells::up_vector(&ramp.dir).as_vec2().normalize();
+        let along: Vec<f32> = cells
             .iter()
-            .flat_map(|ramp_cell| {
-                let IVec2 { x, y } = ramp_cell.cell;
-                [
-                    (x - 1, y - 1),
-                    (x + 2, y - 1),
-                    (x - 1, y + 2),
-                    (x + 2, y + 2),
-                ]
+            .flat_map(|cell| {
+                let c = cell.cell.as_vec2();
+                [c, c + Vec2::X, c + Vec2::Y, c + Vec2::ONE].map(|corner| corner.dot(up))
             })
-            .filter_map(|(x, y)| t3_height_map_res.height_at(x, y))
             .collect();
-        let low = heights.iter().copied().min().unwrap_or_default();
-        let high = heights.iter().copied().max().unwrap_or_default();
-        let progress = ramp_cells::ramp_progress(&ramp.dir, &cells);
-        for (ramp_cell, progress) in cells.iter().zip(progress) {
-            let height = low as f32 + (high - low) as f32 * progress;
-            let material = match ramp_cell.kind {
-                RampCellKind::Ramp => ramp_material.clone(),
-                RampCellKind::Top => top_material.clone(),
-                RampCellKind::Edge => edge_material.clone(),
-            };
-            let IVec2 { x, y } = ramp_cell.cell;
+        let span = (
+            along.iter().copied().fold(f32::INFINITY, f32::min),
+            along.iter().copied().fold(f32::NEG_INFINITY, f32::max),
+        );
+        let heights = (terrain_top(low as f32), terrain_top(high as f32));
+        for (kind, material) in [
+            (RampCellKind::Ramp, &ramp_material),
+            (RampCellKind::Top, &top_material),
+            (RampCellKind::Edge, &edge_material),
+        ] {
+            let kind_cells: Vec<IVec2> = cells
+                .iter()
+                .filter(|cell| cell.kind == kind)
+                .map(|cell| cell.cell)
+                .collect();
+            if kind_cells.is_empty() {
+                continue;
+            }
             commands
                 .spawn((
                     RampComponent,
                     DisplayInfoOnClick,
                     Name(
                         format!(
-                            "Ramp {ramp_ith} going {:?} from level {} to {}: {:?} cell ({x}, {y})",
-                            ramp.dir, ramp.lo, ramp.hi, ramp_cell.kind
+                            "Ramp {ramp_ith} going {:?} from level {low} to {high}: {kind:?} cells",
+                            ramp.dir
                         )
                         .into(),
                     ),
-                    tile_mesh.clone(),
-                    material,
-                    Transform::from_xyz(
-                        (y as f32 + 0.5) * MAP_SCALE_FACTOR,
-                        terrain_top(height) + RAMP_TILE_THICKNESS * 0.5 * MAP_SCALE_FACTOR,
-                        (x as f32 + 0.5) * MAP_SCALE_FACTOR,
-                    ),
+                    Mesh3d(meshes.add(ramp_surface(&kind_cells, up, span, heights))),
+                    material.clone(),
+                    Transform::default(),
                 ))
                 .observe(update_info_on_click);
         }

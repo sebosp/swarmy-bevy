@@ -148,6 +148,11 @@ pub fn ramp_cells(dir: &RampDirection, left_lo: Vec2, right_lo: Vec2) -> Option<
     Some(cells.0)
 }
 
+/// The direction going up the ramp, in cells.
+pub fn up_vector(dir: &RampDirection) -> IVec2 {
+    RampVectors::new(dir).u
+}
+
 /// How far up the ramp the cell is, from 0 at the lowest cells to 1 at the highest ones.
 pub fn ramp_progress(dir: &RampDirection, cells: &[RampCell]) -> Vec<f32> {
     let u = RampVectors::new(dir).u.as_vec2().normalize();

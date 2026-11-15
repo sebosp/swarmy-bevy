@@ -26,7 +26,6 @@ pub fn update_gizmo_config(
     mut config_store: ResMut<GizmoConfigStore>,
     keyboard: Res<ButtonInput<KeyCode>>,
     real_time: Res<Time<Real>>,
-    mut virtual_time: ResMut<Time<Virtual>>,
 ) {
     if keyboard.just_pressed(KeyCode::KeyT) {
         for (_, config, _) in config_store.iter_mut() {
@@ -88,12 +87,5 @@ pub fn update_gizmo_config(
         // AABB gizmos are normally only drawn on entities with a ShowAabbGizmo component
         // We can change this behavior in the configuration of AabbGizmoGroup
         config_store.config_mut::<AabbGizmoConfigGroup>().1.draw_all ^= true;
-    }
-    if keyboard.just_pressed(KeyCode::Space) {
-        if virtual_time.is_paused() {
-            virtual_time.unpause();
-        } else {
-            virtual_time.pause();
-        }
     }
 }
