@@ -23,7 +23,7 @@ const FADE_STEPS: usize = 8;
 /// The direction the wind pushes the puffs, in map cells per second.
 const WIND: Vec3 = Vec3::new(0.25, 0., 0.15);
 
-/// A puff of gas, `age` from 0 to [`PUFF_LIFETIME`], restarting at its vent.
+/// A puff of gas, `age` from 0 to `PUFF_LIFETIME`, restarting at its vent.
 #[derive(Component)]
 pub struct GasPuff {
     vent: Vec3,

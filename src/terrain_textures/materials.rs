@@ -186,7 +186,7 @@ fn luminance(rgb: [f32; 3]) -> f32 {
 }
 
 /// The linear tints of the layers: the colors of the minimap brightened together so that their
-/// mean, weighted by the share of each layer, has [`TARGET_LUMINANCE`]; the layers without one
+/// mean, weighted by the share of each layer, has `TARGET_LUMINANCE`; the layers without one
 /// take `fallback` (the mean color of their texture, or of their kind) as it is.
 pub fn layer_tints(
     minimap_colors: &[Option<[u8; 3]>],
