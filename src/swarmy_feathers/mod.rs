@@ -6,14 +6,18 @@ use bevy::feathers::{controls::*, theme::ThemeBackgroundColor, theme::ThemedText
 use bevy::input_focus::tab_navigation::TabGroup;
 use bevy::prelude::*;
 use bevy::ui::Checked;
-use bevy::ui_widgets::{Activate, ValueChange};
+use bevy::ui_widgets::ValueChange;
 
-use crate::SelectedObjectName;
 use crate::cache_objects::doodas::ObjectDoodadComponent;
 use crate::cache_objects::{ObjectPointComponent, ObjectUnitComponent};
+use crate::collapsible::{
+    ARROW_SIZE, CollapseArrow, Collapsible, CollapsibleBody, CollapsibleHeader, toggle_collapsible,
+};
 use crate::map_graphics::{MapGraphicComponent, MapGraphicsState};
+use crate::pathing::{PathingCheckbox, toggle_pathing};
 use crate::t3_terrain::RampComponent;
 use crate::terrain_textures::{TerrainTexturesCheckbox, TerrainTexturesState};
+use crate::{SelectedEntity, SelectedObjectName};
 
 /// Allows a component to be observed for click events and show display information on a text feather.
 #[derive(Component)]
@@ -67,7 +71,8 @@ fn feather_column_1() -> impl Scene {
 }
 
 /// The panel of what was clicked, at the bottom left, hidden while nothing is selected: the name
-/// of the object, or of the bar with the icons of its units.
+/// of the object, or of the bar with the icons of its units. It folds with its header and takes at
+/// most a fifth of the width of the window, the upgrades timeline takes the rest.
 #[derive(Component, Default, Clone)]
 pub struct SelectionPane;
 
@@ -79,65 +84,77 @@ pub fn selection_pane() -> impl Scene {
     bsn! {
         Node {
             position_type: PositionType::Absolute,
-            bottom: px(12),
-            left: px(12),
-            max_width: px(560),
+            bottom: px(8),
+            left: px(8),
+            // A width, not a max_width: the text wrapped in a max_width overflowed the panel.
+            width: percent(19),
             display: Display::None,
             flex_direction: FlexDirection::Column,
-            padding: px(10),
-            row_gap: px(8),
+            padding: px(8),
+            row_gap: px(6),
         }
         SelectionPane
+        Collapsible { collapsed: false }
         GlobalZIndex(15)
         ThemeBackgroundColor(tokens::WINDOW_BG)
         Children [
             Node {
                 display: Display::Flex,
                 flex_direction: FlexDirection::Row,
-                align_items: AlignItems::Start,
-                column_gap: px(12),
+                align_items: AlignItems::Center,
+                column_gap: px(6),
             }
+            CollapsibleHeader
+            AccessibleLabel("Fold or unfold the selection")
+            on(toggle_collapsible)
             Children [
-                Text("") ThemedText SelectedObjectName
-                TextFont {
-                    font_size: bevy::prelude::FontSize::Px(15.),
-                }
                 Node {
-                    flex_grow: 1.0,
+                    width: px(ARROW_SIZE),
+                    height: px(ARROW_SIZE),
                 }
+                CollapseArrow
                 --
-                @FeathersButton {
-                    @caption: bsn! { Text("Close") ThemedText }
+                Text("Selection") ThemedText
+                TextFont {
+                    font_size: bevy::prelude::FontSize::Px(13.),
                 }
-                AccessibleLabel("Close the selection")
-                on(close_selection)
             ]
             --
             Node {
                 display: Display::Flex,
-                flex_direction: FlexDirection::Row,
-                flex_wrap: FlexWrap::Wrap,
-                column_gap: px(6),
-                row_gap: px(6),
+                flex_direction: FlexDirection::Column,
+                row_gap: px(8),
             }
-            SelectionIcons
+            CollapsibleBody
+            Children [
+                Text("") ThemedText SelectedObjectName
+                TextFont {
+                    font_size: bevy::prelude::FontSize::Px(14.),
+                }
+                --
+                Node {
+                    display: Display::Flex,
+                    flex_direction: FlexDirection::Row,
+                    flex_wrap: FlexWrap::Wrap,
+                    column_gap: px(6),
+                    row_gap: px(6),
+                }
+                SelectionIcons
+            ]
         ]
     }
 }
 
 /// Empties the selection, the panel hides.
-pub fn clear_selection(commands: &mut Commands, text: &mut Text, icons: Entity) {
-    text.0.clear();
-    commands.entity(icons).despawn_related::<Children>();
-}
-
-fn close_selection(
-    _activate: On<Activate>,
-    mut commands: Commands,
-    mut text: Single<&mut Text, With<SelectedObjectName>>,
-    icons: Single<Entity, With<SelectionIcons>>,
+pub fn clear_selection(
+    commands: &mut Commands,
+    text: &mut Text,
+    icons: Entity,
+    selected: &mut SelectedEntity,
 ) {
-    clear_selection(&mut commands, &mut text, *icons);
+    text.0.clear();
+    selected.0 = None;
+    commands.entity(icons).despawn_related::<Children>();
 }
 
 /// Escape closes the selection.
@@ -146,9 +163,10 @@ pub fn close_selection_on_escape(
     mut commands: Commands,
     mut text: Single<&mut Text, With<SelectedObjectName>>,
     icons: Single<Entity, With<SelectionIcons>>,
+    mut selected: ResMut<SelectedEntity>,
 ) {
     if keys.just_pressed(KeyCode::Escape) {
-        clear_selection(&mut commands, &mut text, *icons);
+        clear_selection(&mut commands, &mut text, *icons, &mut selected);
     }
 }
 
@@ -235,6 +253,12 @@ fn main_feather_menu() -> impl Scene {
                             }
                             TerrainTexturesCheckbox
                             on(toggle_terrain_textures)
+                            --
+                            @FeathersCheckbox {
+                                @caption: bsn! { Text("Pathing") ThemedText }
+                            }
+                            PathingCheckbox
+                            on(toggle_pathing)
             ]
         ]
     }
@@ -290,9 +314,11 @@ pub fn update_info_on_click(
     display_info_query: Query<(&Name, Entity), With<DisplayInfoOnClick>>,
     mut selected_object: Single<&mut Text, With<SelectedObjectName>>,
     icons: Single<Entity, With<SelectionIcons>>,
+    mut selected: ResMut<SelectedEntity>,
 ) {
     // The icons of a previous bar go, a bar adds its own after this.
     commands.entity(*icons).despawn_related::<Children>();
+    selected.0 = Some(click.entity);
     for (name, entity) in &display_info_query {
         if entity == click.entity {
             info!(

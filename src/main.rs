@@ -9,8 +9,8 @@ use std::time::Duration;
 use swarmy_bevy::MapScene;
 use swarmy_bevy::cli::*;
 use swarmy_bevy::embedded_assets::{EmbeddedAssetsPlugin, SWARMY_OBJECTS_GLTF};
-use swarmy_bevy::replay::ReplayData;
-use swarmy_bevy::replay::plugin::{ReplayPlugin, ReplayStartSeconds};
+use swarmy_bevy::replay::plugin::{BarSelection, ReplayPlugin, ReplayStartSeconds};
+use swarmy_bevy::replay::{CellEventKind, ReplayData};
 
 fn main() {
     let args = Args::parse();
@@ -32,6 +32,9 @@ fn main() {
         })
     });
     let ids = match (&replay, args.map_cache_ids) {
+        // The games played with a local map (AI Arena) have no cache handles: its file, named
+        // <id>.s2ma in the map caches directory, is given with the ids.
+        (Some(replay), Some(ids)) if replay.cache_handle_ids.is_empty() => ids,
         (Some(replay), _) => replay.cache_handle_ids.join(","),
         (None, Some(ids)) => ids,
         (None, None) => unreachable!("has_map requires the map cache ids without a replay"),
@@ -42,6 +45,14 @@ fn main() {
     if let Some(replay) = replay {
         app.insert_resource(replay)
             .insert_resource(ReplayStartSeconds(args.replay_seconds))
+            .insert_resource(BarSelection {
+                kind: match args.replay_bars {
+                    Some(ReplayBars::Births) => CellEventKind::Born,
+                    Some(ReplayBars::Kills) => CellEventKind::Kill,
+                    Some(ReplayBars::Deaths) | None => CellEventKind::Died,
+                },
+                unit: args.replay_unit.clone(),
+            })
             .add_plugins(ReplayPlugin);
     }
     // A window out of sight waits for the display forever, a screenshot must not.
@@ -80,11 +91,15 @@ fn main() {
             FreeCameraPlugin,
             swarmy_bevy::view_settings::ViewSettingsPlugin,
             swarmy_bevy::help_ui::HelpUiPlugin,
+            swarmy_bevy::auto_rotate::AutoRotatePlugin,
             swarmy_bevy::map_plugin::MapPlugin {
                 map_graphics: args.map_graphics,
             },
             swarmy_bevy::terrain_textures::TerrainTexturesPlugin {
                 enabled: terrain_textures,
+            },
+            swarmy_bevy::pathing::PathingPlugin {
+                enabled: args.pathing,
             },
             MeshPickingPlugin,
             swarmy_bevy::screenshot::ScreenshotPlugin,

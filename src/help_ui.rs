@@ -1,8 +1,8 @@
-//! The buttons at the top right of the window: Help, what the keys do, what the colors mean and
-//! how to move on the map, and Settings, the size of the text and of the panels.
+//! The Auto-rotate and Help buttons at the top right of the window. Help: what the keys do, what
+//! the colors mean and how to move on the map. The size of the text has no panel, Ctrl+= / Ctrl+- / Ctrl+0 change it.
 
+use crate::auto_rotate::{AutoRotateText, toggle_auto_rotate};
 use crate::replay::ReplayData;
-use crate::view_settings::ViewSettings;
 use bevy::feathers::controls::*;
 use bevy::feathers::theme::{ThemeBackgroundColor, ThemedText};
 use bevy::feathers::tokens;
@@ -17,20 +17,12 @@ pub struct HelpPanel;
 #[derive(Component, Default, Clone)]
 pub struct HelpText;
 
-/// The panel of Settings.
-#[derive(Component, Default, Clone)]
-pub struct SettingsPanel;
-
-/// The size of the text shown in Settings.
-#[derive(Component, Default, Clone)]
-pub struct ScaleText;
-
 pub struct HelpUiPlugin;
 
 impl Plugin for HelpUiPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, (toolbar.spawn(), write_help).chain())
-            .add_systems(Update, (show_scale, close_on_escape));
+            .add_systems(Update, close_on_escape);
     }
 }
 
@@ -46,6 +38,11 @@ pub fn help_text(context: &HelpContext) -> String {
         "  W A S D: move, Shift to go faster, Space (or E): up, Q: down".to_string(),
         "  Right drag: look around, the wheel changes the speed".to_string(),
         "  M: lock or unlock the mouse".to_string(),
+        "  Auto-rotate (top right): the camera turns slowly around the point of the ground in the"
+            .to_string(),
+        "  middle of the view, a turn in 90 seconds; moving the camera (keys, right drag, wheel)"
+            .to_string(),
+        "  or Stop rotating stops it.".to_string(),
         String::new(),
         "View menu".to_string(),
         "  Enable Map Graphics: the models and textures stored with the map, where the map"
@@ -66,9 +63,25 @@ pub fn help_text(context: &HelpContext) -> String {
         "  Textures: Poly Haven (polyhaven.com), CC0.".to_string(),
         "  The mineral fields are ores with glowing crystals, blue (gold the rich ones), that"
             .to_string(),
-        "  twinkle; the geysers have a green vent puffing their gas; the start locations are"
+        "  twinkle; the geysers are a ring of rock around a vent puffing green gas (violet for the"
             .to_string(),
-        "  landing pads with lights running around them.".to_string(),
+        "  rich geysers); the start locations are landing pads with lights running around them."
+            .to_string(),
+        "  Destructible rocks are piles of boulders, debris piles of rusty metal chunks, the".to_string(),
+        "  unbuildable plates gray hexagonal plates, on a dark patch of rubble the size of their".to_string(),
+        "  footprint (along the diagonal for the diagonal ones). Click one for its name.".to_string(),
+        "  No fly zones (air units cannot enter): a red \"no\" sign on the ground, a ring crossed by"
+            .to_string(),
+        "  a bar, under a faint red column of air with fading hoops.".to_string(),
+        "  Pathing: the ground a unit can walk on, read from the cliffs of the map, in faint"
+            .to_string(),
+        "  aqua. In a replay, the cells of the buildings, minerals, geysers and rocks standing"
+            .to_string(),
+        "  at the time shown are orange, and the ground they close off from the rest of the map"
+            .to_string(),
+        "  is violet: the units there cannot walk out (a base walled in). Gaps of less than 4"
+            .to_string(),
+        "  cells are left out.".to_string(),
         String::new(),
         "Keys".to_string(),
     ];
@@ -97,14 +110,30 @@ pub fn help_text(context: &HelpContext) -> String {
     }
     if context.replay {
         lines.extend([
-            "  Replay: a bar counts the units died (or born, from the dropdown) per 4x4 cells up to the time shown, in the color of their player; two players in the same cell share it".to_string(),
-            "  Click a unit in the panel at the top right to show only its bars, click it again for all of them".to_string(),
-            "  Players: the winner first, a green triangle up, the loser a red triangle down".to_string(),
+            "  Replay: a bar counts, per 4x4 cells up to the time shown, in the color of its player, the".to_string(),
+            "  units died (Deaths), born (Births) or the enemy units killed (Kills, at the place of the".to_string(),
+            "  killer), from the dropdown. Each player has its own slot in a cell, its bars never hide".to_string(),
+            "  another's.".to_string(),
+            "  Click a unit in the panel at the top right to show only its bars, click it again for all".to_string(),
+            "  of them.".to_string(),
+            "  Kills: clicking a bar, or a Siege Tank, Liberator, Lurker, Photon Cannon, Spine Crawler,".to_string(),
+            "  Planetary Fortress or Missile Turret in the units panel, draws the range of these units".to_string(),
+            "  around the places they killed from: a circle in a light shade of the player's color (a".to_string(),
+            "  dark edge around it), the unit a small circle; a Liberator's zone is joined to it.".to_string(),
+            "  Players: the winner first, a green triangle up, the loser a red triangle down; click the".to_string(),
+            "  most effective unit of a player to show where it killed (Kills).".to_string(),
+            "  The bars of the unit chosen in a panel breathe, their glow rising and falling.".to_string(),
+            "  Upgrades (bottom): a lane per player, each upgrade's icon where it finished, the minutes".to_string(),
+            "  under them, a light line at the time shown; the upgrades after it are faded. Hover an".to_string(),
+            "  icon for its name and time.".to_string(),
         ]);
     }
     lines.extend([
         String::new(),
-        "Click a bar or an object to see what it is at the bottom left, with the units of a bar; Close or Escape hides it.".to_string(),
+        "Click a bar or an object to see what it is at the bottom left, with the units of a bar;"
+            .to_string(),
+        "Escape hides it. Click the header of a panel with an arrow to fold or unfold it."
+            .to_string(),
     ]);
     lines.join("\n")
 }
@@ -115,70 +144,25 @@ fn write_help(mut text: Single<&mut Text, With<HelpText>>, replay: Option<Res<Re
     });
 }
 
-/// Shows a panel and hides the other one, or hides it when it is shown.
-fn toggle_panel<Shown: Component, Other: Component>(
-    shown: &mut Query<&mut Node, (With<Shown>, Without<Other>)>,
-    other: &mut Query<&mut Node, (With<Other>, Without<Shown>)>,
-) {
-    for mut node in shown.iter_mut() {
+fn toggle_help(_activate: On<Activate>, mut help: Query<&mut Node, With<HelpPanel>>) {
+    for mut node in &mut help {
         node.display = if node.display == Display::None {
             Display::Flex
         } else {
             Display::None
         };
     }
-    for mut node in other.iter_mut() {
-        node.display = Display::None;
-    }
 }
 
-fn toggle_help(
-    _activate: On<Activate>,
-    mut help: Query<&mut Node, (With<HelpPanel>, Without<SettingsPanel>)>,
-    mut settings: Query<&mut Node, (With<SettingsPanel>, Without<HelpPanel>)>,
-) {
-    toggle_panel(&mut help, &mut settings);
-}
-
-fn toggle_settings(
-    _activate: On<Activate>,
-    mut settings: Query<&mut Node, (With<SettingsPanel>, Without<HelpPanel>)>,
-    mut help: Query<&mut Node, (With<HelpPanel>, Without<SettingsPanel>)>,
-) {
-    toggle_panel(&mut settings, &mut help);
-}
-
-fn close_on_escape(
-    keys: Res<ButtonInput<KeyCode>>,
-    mut panels: Query<&mut Node, Or<(With<HelpPanel>, With<SettingsPanel>)>>,
-) {
+fn close_on_escape(keys: Res<ButtonInput<KeyCode>>, mut help: Query<&mut Node, With<HelpPanel>>) {
     if keys.just_pressed(KeyCode::Escape) {
-        for mut node in &mut panels {
+        for mut node in &mut help {
             node.display = Display::None;
         }
     }
 }
 
-fn smaller_text(_activate: On<Activate>, mut settings: ResMut<ViewSettings>) {
-    *settings = settings.stepped(-1);
-}
-
-fn bigger_text(_activate: On<Activate>, mut settings: ResMut<ViewSettings>) {
-    *settings = settings.stepped(1);
-}
-
-fn default_text(_activate: On<Activate>, mut settings: ResMut<ViewSettings>) {
-    *settings = settings.stepped(0);
-}
-
-fn show_scale(settings: Res<ViewSettings>, mut text: Single<&mut Text, With<ScaleText>>) {
-    let label = format!("{:.0}%", settings.ui_scale * 100.);
-    if text.0 != label {
-        text.0 = label;
-    }
-}
-
-/// The Help and Settings buttons at the top right and their panels below them.
+/// The Help button at the top right and its panel below it.
 fn toolbar() -> impl SceneList {
     bsn_list! {
         Node {
@@ -192,10 +176,10 @@ fn toolbar() -> impl SceneList {
         GlobalZIndex(20)
         Children [
             @FeathersButton {
-                @caption: bsn! { Text("Settings") ThemedText }
+                @caption: bsn! { Text("Auto-rotate") ThemedText AutoRotateText }
             }
-            AccessibleLabel("Settings: the size of the text")
-            on(toggle_settings)
+            AccessibleLabel("Turn the camera slowly around the map, or stop")
+            on(toggle_auto_rotate)
             --
             @FeathersButton {
                 @caption: bsn! { Text("?") ThemedText }
@@ -223,58 +207,6 @@ fn toolbar() -> impl SceneList {
                 font_size: bevy::prelude::FontSize::Px(14.),
             }
         ]
-        --
-        Node {
-            position_type: PositionType::Absolute,
-            top: px(40),
-            right: px(8),
-            display: Display::None,
-            flex_direction: FlexDirection::Column,
-            padding: px(12),
-            row_gap: px(10),
-        }
-        GlobalZIndex(20)
-        SettingsPanel
-        ThemeBackgroundColor(tokens::WINDOW_BG)
-        Children [
-            Text("Size of the text and panels") ThemedText
-            TextFont {
-                font_size: bevy::prelude::FontSize::Px(14.),
-            }
-            --
-            Node {
-                display: Display::Flex,
-                flex_direction: FlexDirection::Row,
-                align_items: AlignItems::Center,
-                column_gap: px(8),
-            }
-            Children [
-                @FeathersButton {
-                    @caption: bsn! { Text("Smaller") ThemedText }
-                }
-                on(smaller_text)
-                --
-                Text("100%") ThemedText ScaleText
-                TextFont {
-                    font_size: bevy::prelude::FontSize::Px(14.),
-                }
-                --
-                @FeathersButton {
-                    @caption: bsn! { Text("Bigger") ThemedText }
-                }
-                on(bigger_text)
-                --
-                @FeathersButton {
-                    @caption: bsn! { Text("Default") ThemedText }
-                }
-                on(default_text)
-            ]
-            --
-            Text("Also Ctrl+= and Ctrl+-, Ctrl+0 for the default.") ThemedText
-            TextFont {
-                font_size: bevy::prelude::FontSize::Px(12.),
-            }
-        ]
     }
 }
 
@@ -287,6 +219,9 @@ mod tests {
         let replay = help_text(&HelpContext { replay: true });
         assert!(replay.contains("in grays"));
         assert!(replay.contains("Left and Right arrows"));
+        assert!(replay.contains("Kills"));
+        assert!(replay.contains("Upgrades (bottom)"));
+        assert!(replay.contains("Ctrl+="));
         let map = help_text(&HelpContext { replay: false });
         assert!(map.contains("ramps in amber"));
         assert!(!map.contains("Left and Right arrows"));

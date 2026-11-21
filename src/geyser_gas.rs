@@ -1,5 +1,5 @@
-//! The gas of the geysers: puffs that rise from the green vent of each geyser, swell, drift with
-//! the wind and fade, then start again. The puffs of all the geysers share one mesh and a few
+//! The gas of the geysers: puffs that rise from the vent of each geyser, green (violet for the
+//! rich geysers), swell, drift with the wind and fade, then start again. The puffs of all the geysers share one mesh and a few
 //! materials (one per step of their fading), so that the window stays light.
 
 use crate::MAP_SCALE_FACTOR;
@@ -30,13 +30,34 @@ pub struct GasPuff {
     age: f32,
     /// A small sideways drift of its own, so that the puffs do not stack.
     drift: Vec3,
+    /// The violet gas of a rich geyser.
+    rich: bool,
 }
+
+/// The colors of the gas: the color of a puff at the vent and its glow.
+const GREEN_GAS: (Srgba, LinearRgba) =
+    (Srgba::rgb(0.45, 0.95, 0.5), LinearRgba::rgb(0.15, 0.6, 0.2));
+const VIOLET_GAS: (Srgba, LinearRgba) = (
+    Srgba::rgb(0.78, 0.5, 1.0),
+    LinearRgba::rgb(0.45, 0.15, 0.75),
+);
 
 /// The shared mesh and fading materials of the puffs.
 #[derive(Resource)]
 struct PuffAssets {
     mesh: Handle<Mesh>,
     fades: Vec<Handle<StandardMaterial>>,
+    violet_fades: Vec<Handle<StandardMaterial>>,
+}
+
+impl PuffAssets {
+    fn fades(&self, rich: bool) -> &[Handle<StandardMaterial>] {
+        if rich {
+            &self.violet_fades
+        } else {
+            &self.fades
+        }
+    }
 }
 
 pub struct GeyserGasPlugin;
@@ -55,7 +76,7 @@ pub fn noise(seed: f32) -> f32 {
 /// Starts the puffs of the geysers once their vents are spawned.
 fn spawn_puffs(
     mut commands: Commands,
-    vents: Query<(&ChildOf, &Transform), Added<GeyserGas>>,
+    vents: Query<(&ChildOf, &Transform, &GeyserGas), Added<GeyserGas>>,
     geysers: Query<&Transform>,
     assets: Option<Res<PuffAssets>>,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -65,32 +86,41 @@ fn spawn_puffs(
         return;
     }
     let assets = match assets {
-        Some(assets) => (assets.mesh.clone(), assets.fades.clone()),
+        Some(assets) => (
+            assets.mesh.clone(),
+            assets.fades.clone(),
+            assets.violet_fades.clone(),
+        ),
         None => {
             let mesh = meshes.add(Sphere::new(0.5).mesh().uv(12, 8));
-            let fades: Vec<Handle<StandardMaterial>> = (0..FADE_STEPS)
-                .map(|step| {
-                    // Opaque-ish at the vent, gone at the top.
-                    let alpha = 0.55 * (1. - step as f32 / FADE_STEPS as f32);
-                    materials.add(StandardMaterial {
-                        base_color: Color::srgba(0.45, 0.95, 0.5, alpha),
-                        emissive: LinearRgba::rgb(0.15, 0.6, 0.2)
-                            * (1. - step as f32 / FADE_STEPS as f32),
-                        alpha_mode: AlphaMode::Blend,
-                        unlit: true,
-                        ..default()
+            let mut fading = |(color, glow): (Srgba, LinearRgba)| -> Vec<Handle<StandardMaterial>> {
+                (0..FADE_STEPS)
+                    .map(|step| {
+                        // Opaque-ish at the vent, gone at the top.
+                        let left = 1. - step as f32 / FADE_STEPS as f32;
+                        materials.add(StandardMaterial {
+                            base_color: Color::from(color.with_alpha(0.55 * left)),
+                            emissive: glow * left,
+                            alpha_mode: AlphaMode::Blend,
+                            unlit: true,
+                            ..default()
+                        })
                     })
-                })
-                .collect();
+                    .collect()
+            };
+            let fades = fading(GREEN_GAS);
+            let violet_fades = fading(VIOLET_GAS);
             commands.insert_resource(PuffAssets {
                 mesh: mesh.clone(),
                 fades: fades.clone(),
+                violet_fades: violet_fades.clone(),
             });
-            (mesh, fades)
+            (mesh, fades, violet_fades)
         }
     };
-    let (mesh, fades) = assets;
-    for (child_of, vent) in &vents {
+    let (mesh, fades, violet_fades) = assets;
+    for (child_of, vent, gas) in &vents {
+        let fades = if gas.rich { &violet_fades } else { &fades };
         let Ok(geyser) = geysers.get(child_of.parent()) else {
             continue;
         };
@@ -103,6 +133,7 @@ fn spawn_puffs(
                     // Spread over the lifetime, so that the plume is continuous.
                     age: PUFF_LIFETIME * puff as f32 / PUFFS_PER_GEYSER as f32,
                     drift: Vec3::new(noise(seed) - 0.5, 0., noise(seed + 1.) - 0.5) * 0.6,
+                    rich: gas.rich,
                 },
                 ObjectUnitComponent,
                 Mesh3d(mesh.clone()),
@@ -138,8 +169,9 @@ fn move_puffs(
         let size = PUFF_START_SIZE + (PUFF_END_SIZE - PUFF_START_SIZE) * life;
         transform.scale = Vec3::splat(size * MAP_SCALE_FACTOR);
         let step = ((life * FADE_STEPS as f32) as usize).min(FADE_STEPS - 1);
-        if material.0 != assets.fades[step] {
-            material.0 = assets.fades[step].clone();
+        let fade = &assets.fades(puff.rich)[step];
+        if material.0 != *fade {
+            material.0 = fade.clone();
         }
     }
 }

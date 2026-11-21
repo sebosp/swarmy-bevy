@@ -31,7 +31,8 @@ pub struct Args {
     #[arg(short = 'p', long = "map-caches", alias = "path", value_name = "DIR")]
     pub map_caches: Option<String>,
     /// The map to draw, a comma-separated list of the cache ids (sha256) of the map in the map
-    /// caches directory, as stored in a replay. Not needed with --replay, the replay has them.
+    /// caches directory, as stored in a replay. Not needed with --replay, the replay has them,
+    /// unless it was played on a local map (AI Arena): the map file is then <id>.s2ma.
     #[arg(
         short = 'i',
         long = "map-cache-ids",
@@ -46,6 +47,13 @@ pub struct Args {
     /// The game second the replay starts at, the start of the game by default.
     #[arg(long, value_name = "SECONDS", requires = "replay")]
     pub replay_seconds: Option<u32>,
+    /// What the bars of the replay count at the start: the units died, born, or the kills at the
+    /// position of the killer, as the dropdown of the replay panel.
+    #[arg(long, value_enum, value_name = "KIND", requires = "replay")]
+    pub replay_bars: Option<ReplayBars>,
+    /// Starts with the bars of one unit type, i.e. SiegeTank, as clicking it in the units panel.
+    #[arg(long, value_name = "UNIT", requires = "replay")]
+    pub replay_unit: Option<String>,
     /// Starts with the models and textures of the map caches shown, as in the View menu.
     #[arg(long)]
     pub map_graphics: bool,
@@ -53,9 +61,20 @@ pub struct Args {
     /// for a map, off for a replay.
     #[arg(long, value_name = "true|false")]
     pub terrain_textures: Option<bool>,
+    /// Starts with the ground pathing drawn, as the View menu's Pathing.
+    #[arg(long)]
+    pub pathing: bool,
     /// Saves a screenshot to this PNG file once the map is drawn and exits.
     #[arg(long, value_name = "FILE")]
     pub screenshot: Option<String>,
+}
+
+/// What the bars of a replay count.
+#[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReplayBars {
+    Deaths,
+    Births,
+    Kills,
 }
 
 impl Args {

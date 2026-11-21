@@ -10,9 +10,11 @@ pub use s2protocol::cache_handles::map::coords::*;
 pub use s2protocol::cache_handles::map_info::*;
 pub use s2protocol::cache_handles::t3_height_map::*;
 
+pub mod auto_rotate;
 pub mod baked_light;
 pub mod cache_objects;
 pub mod cli;
+pub mod collapsible;
 pub mod document_header;
 pub mod embedded_assets;
 pub mod geyser_gas;
@@ -20,7 +22,10 @@ pub mod helipad;
 pub mod map_graphics;
 pub mod map_info;
 pub mod minerals;
+pub mod no_fly_zone;
+pub mod pathing;
 pub mod replay;
+pub mod rocks;
 pub mod screenshot;
 pub mod swarmy_feathers;
 pub mod t3_height_map;
@@ -39,6 +44,10 @@ pub struct MapScene(pub Handle<Gltf>);
 /// Show some text if there's a current action
 #[derive(Default, Component, Reflect, Clone)]
 pub struct SelectedObjectName(pub String);
+
+/// The entity clicked, shown in the selection panel, None once the selection is closed.
+#[derive(Resource, Debug, Default)]
+pub struct SelectedEntity(pub Option<Entity>);
 
 /// From gltf_pbr/src/gltf.rs, temp fix because I don't know how to load these materials...
 /// Converts a [`GltfMaterial`] to a [`StandardMaterial`]

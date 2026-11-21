@@ -3,17 +3,21 @@
 //! The replay contains the cache handles of the map, so only the cache path is needed. The unit
 //! born and died tracker events are aggregated per cell of [`AGGREGATE_CELLS`] map cells, the
 //! [`plugin`] draws them as bars that grow as the time moves forward in [`TIME_STEP_SECONDS`]
-//! steps. The players, their upgrades and their most effective unit and ability are shown too.
+//! steps. The kills are aggregated at the position of the killer unit, with the range of the
+//! static and sieged units ([`RANGED_UNITS`]). The players, their upgrades and their most
+//! effective unit and ability are shown too.
 
 pub mod plugin;
+pub mod timeline;
 
 use crate::error::BevySC2MapError;
 use bevy::math::UVec2;
 use bevy::prelude::Resource;
 use s2protocol::basic_replay_data::SC2ReplayBasicData;
+use s2protocol::cache_handles::pathing::ground_footprint;
 use s2protocol::game_events::{VersionedBalanceUnits, read_balance_data_from_included_assets};
 use s2protocol::tracker_events::ReplayTrackerEvent;
-use s2protocol::{SC2EventIterator, SC2EventType, SC2Unit, UnitChangeHint};
+use s2protocol::{SC2EventIterator, SC2EventType, SC2Unit, SC2UnitCmdData, UnitChangeHint};
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 
@@ -62,8 +66,54 @@ pub struct ReplayPlayer {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CellEventKind {
+    /// A unit born, not the hallucinations.
     Born,
+    /// A unit lost, killed by another player or its own, not a morph or a unit that expired.
     Died,
+    /// An enemy unit killed, at the position of the killer unit, counted for its owner.
+    Kill,
+}
+
+/// The units whose range is drawn around the positions they killed from, in the form they have
+/// while they fire (sieged, burrowed), with the upgrade that extends it and by how much: the
+/// balance data has the ranges, not what the upgrades add (game values of the current patch).
+pub const RANGED_UNITS: [(&str, Option<(&str, f32)>); 7] = [
+    ("SiegeTankSieged", None),
+    ("LiberatorAG", None),
+    // Seismic Spines.
+    ("LurkerMPBurrowed", Some(("LurkerRange", 2.))),
+    ("PhotonCannon", None),
+    ("SpineCrawler", None),
+    // Hi-Sec Auto Tracking.
+    ("PlanetaryFortress", Some(("HiSecAutoTracking", 1.))),
+    ("MissileTurret", Some(("HiSecAutoTracking", 1.))),
+];
+
+/// The ranges used when the balance data of the build has no weapon range for a unit.
+const FALLBACK_RANGES: [(&str, f32); 7] = [
+    ("SiegeTankSieged", 13.),
+    ("LiberatorAG", 10.),
+    ("LurkerMPBurrowed", 8.),
+    ("PhotonCannon", 7.),
+    ("SpineCrawler", 7.),
+    ("PlanetaryFortress", 6.),
+    ("MissileTurret", 7.),
+];
+
+/// The radius of the zone of a Liberator in Defender Mode around the point it was ordered to,
+/// its weapon's range (10) reaches the far side of the zone.
+pub const LIBERATOR_ZONE_RADIUS: f32 = 5.;
+
+/// The area a unit of [`RANGED_UNITS`] fired at when it killed, in map coordinates.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RangeCircle {
+    /// The index of the owner in [`ReplayData::players`].
+    pub player: usize,
+    /// The position of the unit.
+    pub unit: (f32, f32),
+    /// The center of the circle: the unit, or the zone of a Liberator.
+    pub center: (f32, f32),
+    pub radius: f32,
 }
 
 /// An aggregated cell and the index of a player in [`ReplayData::players`].
@@ -101,11 +151,22 @@ pub struct Kill {
     pub unit: String,
     /// The last ability the killer unit was commanded, unless it is a generic one like attack.
     pub ability: Option<String>,
+    /// The killer unit as it was when it killed, i.e. `SiegeTankSieged`.
+    pub variant: String,
+    pub tag_index: u32,
+    /// The position of the killer unit, in map coordinates.
+    pub pos: (f32, f32),
+    /// The radius of the killer unit, its range starts at its edge.
+    pub radius: f32,
+    /// The point of the last command of the killer unit, the zone of a Liberator.
+    pub target: Option<(f32, f32)>,
 }
 
 /// The replay aggregated for the map.
 #[derive(Resource, Debug, Clone, Default)]
 pub struct ReplayData {
+    /// The units that block the ground over time, for [`crate::pathing`].
+    pub blockers: Vec<crate::pathing::BlockerEvent>,
     pub file_name: String,
     pub map_title: String,
     /// The sha256 of the cache handles, the names of the files in the cache path.
@@ -119,6 +180,8 @@ pub struct ReplayData {
     /// The icons of the units and of the ability commands, `<ability>.<command>`.
     pub unit_icons: HashMap<String, String>,
     pub ability_icons: HashMap<String, String>,
+    /// The weapon range of the units of [`RANGED_UNITS`], from the balance data of the build.
+    pub weapon_ranges: HashMap<String, f32>,
 }
 
 /// Removes the escapes of the clan tag of the player names, i.e. `&lt;TAG&gt;<sp/>Player`.
@@ -150,11 +213,30 @@ fn has_cost(balance: &VersionedBalanceUnits, name: &str) -> bool {
         .is_some_and(|cost| cost.minerals.unwrap_or(0) > 0 || cost.vespene.unwrap_or(0) > 0)
 }
 
+/// The parts of the names of the abilities that switch the mode of a unit without damage: burrow
+/// down or up, siege and unsiege, the modes of the Liberator, Viking, Thor and Warp Prism, the
+/// morphs, a building lifting off or landing. The last command of a sieged Tank or a burrowed
+/// Lurker is the switch, it is not what killed.
+const MODE_SWITCHES: [&str; 8] = [
+    "burrow",
+    "mode",
+    "unsiege",
+    "liberatoragtarget",
+    "morph",
+    "phasing",
+    "lift",
+    "land",
+];
+
+/// The abilities that are not interesting as the most effective one: every unit has them, or they
+/// switch the mode of the unit and do not kill.
 fn is_generic_ability(ability: &str) -> bool {
+    let lower = ability.to_lowercase();
     ability.is_empty()
         || GENERIC_ABILITIES
             .iter()
             .any(|generic| ability.starts_with(generic))
+        || MODE_SWITCHES.iter().any(|switch| lower.contains(switch))
 }
 
 /// The balance data of the protocol version or the closest older one, newer patches add units.
@@ -165,6 +247,25 @@ fn closest_balance(
     all.iter()
         .min_by_key(|(candidate, _)| (**candidate > version, candidate.abs_diff(version)))
         .map(|(_, units)| units)
+}
+
+/// The longest weapon range of a unit in the balance data, or the known value of the game.
+fn weapon_range(balance: &VersionedBalanceUnits, name: &str) -> Option<f32> {
+    balance
+        .get(name)
+        .and_then(|unit| {
+            unit.weapons
+                .inner
+                .iter()
+                .filter_map(|weapon| weapon.misc.as_ref()?.range)
+                .reduce(f32::max)
+        })
+        .or_else(|| {
+            FALLBACK_RANGES
+                .iter()
+                .find(|(unit, _)| *unit == name)
+                .map(|(_, range)| *range)
+        })
 }
 
 /// The aggregated cell of a map position.
@@ -233,8 +334,14 @@ impl ReplayData {
                 .filter_map(|(name, unit)| Some((name.clone(), unit.meta.icon.clone()?)))
                 .collect(),
             ability_icons: s2protocol::textures::ability_command_icons(&balance),
+            weapon_ranges: RANGED_UNITS
+                .iter()
+                .filter_map(|(unit, _)| Some((unit.to_string(), weapon_range(&balance, unit)?)))
+                .collect(),
             ..Default::default()
         };
+        // The units that block the ground now or did, a depot lowered still has its tag here.
+        let mut blocking_tags: std::collections::HashSet<u32> = Default::default();
         for item in SC2EventIterator::new(&basic_data, &all_balance)? {
             let SC2EventType::Tracker {
                 tracker_loop,
@@ -245,6 +352,34 @@ impl ReplayData {
             };
             let seconds = loop_seconds(*tracker_loop);
             data.duration_seconds = data.duration_seconds.max(seconds);
+            // Born, done or changed (a depot lowered, a building lifting off), and died.
+            match &item.change_hint {
+                UnitChangeHint::Registered { unit, .. }
+                    if ground_footprint(&unit.name).is_some()
+                        || blocking_tags.contains(&unit.tag_index) =>
+                {
+                    blocking_tags.insert(unit.tag_index);
+                    data.blockers.push(crate::pathing::BlockerEvent {
+                        seconds,
+                        tag_index: unit.tag_index,
+                        unit: Some(unit.name.clone()),
+                        x: unit.pos.x() as i32,
+                        y: unit.pos.y() as i32,
+                    });
+                }
+                UnitChangeHint::Unregistered { killed, .. }
+                    if blocking_tags.remove(&killed.tag_index) =>
+                {
+                    data.blockers.push(crate::pathing::BlockerEvent {
+                        seconds,
+                        tag_index: killed.tag_index,
+                        unit: None,
+                        x: 0,
+                        y: 0,
+                    });
+                }
+                _ => {}
+            }
             match (event, &item.change_hint) {
                 (
                     ReplayTrackerEvent::UnitBorn(_) | ReplayTrackerEvent::UnitInit(_),
@@ -253,7 +388,12 @@ impl ReplayData {
                     let Some(player) = unit_player(unit) else {
                         continue;
                     };
-                    if has_cost(&balance, &unit.name) {
+                    // The hallucinations of a sentry are not units of the player.
+                    let hallucination = unit
+                        .creator_ability_name
+                        .as_deref()
+                        .is_some_and(|ability| ability.starts_with("Hallucination"));
+                    if has_cost(&balance, &unit.name) && !hallucination {
                         data.events.push(CellEvent {
                             seconds,
                             cell: aggregate_cell(unit),
@@ -264,13 +404,16 @@ impl ReplayData {
                     }
                 }
                 (
-                    ReplayTrackerEvent::UnitDied(_),
+                    ReplayTrackerEvent::UnitDied(died),
                     UnitChangeHint::Unregistered { killer, killed },
                 ) => {
                     let Some(player) = unit_player(killed) else {
                         continue;
                     };
-                    if !has_cost(&balance, &killed.name) {
+                    // Only the units lost are deaths: a Drone that becomes a structure, a Larva
+                    // that hatches, an expired MULE, AutoTurret or AdeptPhaseShift, a
+                    // hallucination or a cancelled building are not (`UnitDiedCause`).
+                    if !died.cause.is_loss() || !has_cost(&balance, &killed.name) {
                         continue;
                     }
                     data.events.push(CellEvent {
@@ -280,28 +423,45 @@ impl ReplayData {
                         player,
                         unit: base_unit_name(&killed.name).to_string(),
                     });
-                    // A Drone morphing into a structure dies without a killer, own units killed
-                    // are not kills either.
+                    // A kill is a unit killed by another player, own units killed are losses
+                    // only. A unit killed inside a transport has no killer to show.
+                    if !died.cause.is_kill() {
+                        continue;
+                    }
                     let Some(killer) = killer else {
                         continue;
                     };
                     let Some(killer_player) = unit_player(killer) else {
                         continue;
                     };
-                    if killer_player == player {
-                        continue;
-                    }
                     let ability = killer
                         .cmd
                         .abil
                         .as_ref()
                         .map(|abil| abil.ability.clone())
                         .filter(|ability| !is_generic_ability(ability));
+                    let unit = base_unit_name(&killer.name).to_string();
+                    data.events.push(CellEvent {
+                        seconds,
+                        cell: aggregate_cell(killer),
+                        kind: CellEventKind::Kill,
+                        player: killer_player,
+                        unit: unit.clone(),
+                    });
+                    let target = match &killer.cmd.data {
+                        SC2UnitCmdData::TargetPoint(point) => Some((point.x(), point.y())),
+                        _ => None,
+                    };
                     data.kills.push(Kill {
                         seconds,
                         player: killer_player,
-                        unit: base_unit_name(&killer.name).to_string(),
+                        unit,
                         ability,
+                        variant: killer.name.clone(),
+                        tag_index: killer.tag_index,
+                        pos: (killer.pos.x(), killer.pos.y()),
+                        radius: killer.radius,
+                        target,
                     });
                 }
                 (ReplayTrackerEvent::Upgrade(upgrade), _) => {
@@ -432,6 +592,73 @@ impl ReplayData {
             .collect()
     }
 
+    /// Whether the player finished the upgrade up to the time.
+    fn has_upgrade(&self, player: usize, name: &str, until_seconds: u32) -> bool {
+        self.upgrades.iter().any(|upgrade| {
+            upgrade.player == player && upgrade.seconds <= until_seconds && upgrade.name == name
+        })
+    }
+
+    /// The range of the units of [`RANGED_UNITS`] that killed up to the time, of one unit type
+    /// or all of them, of one cell and player or all of them: one circle per unit and position.
+    pub fn range_circles(
+        &self,
+        until_seconds: u32,
+        unit: Option<&str>,
+        cell_player: Option<CellPlayer>,
+    ) -> Vec<RangeCircle> {
+        let mut seen: std::collections::HashSet<(u32, i32, i32)> = Default::default();
+        let mut circles = vec![];
+        for kill in self
+            .kills
+            .iter()
+            .take_while(|kill| kill.seconds <= until_seconds)
+        {
+            if unit.is_some_and(|unit| unit != kill.unit) {
+                continue;
+            }
+            let cell = (
+                kill.pos.0.max(0.) as u32 / AGGREGATE_CELLS,
+                kill.pos.1.max(0.) as u32 / AGGREGATE_CELLS,
+            );
+            if cell_player.is_some_and(|(at, player)| at != cell || player != kill.player) {
+                continue;
+            }
+            let Some((_, upgrade)) = RANGED_UNITS
+                .iter()
+                .find(|(variant, _)| *variant == kill.variant)
+            else {
+                continue;
+            };
+            let Some(range) = self.weapon_ranges.get(&kill.variant) else {
+                continue;
+            };
+            // A unit firing from the same spot again is one circle.
+            if !seen.insert((
+                kill.tag_index,
+                kill.pos.0.round() as i32,
+                kill.pos.1.round() as i32,
+            )) {
+                continue;
+            }
+            let bonus = upgrade
+                .filter(|(name, _)| self.has_upgrade(kill.player, name, kill.seconds))
+                .map(|(_, bonus)| bonus)
+                .unwrap_or_default();
+            let (center, radius) = match (kill.variant.as_str(), kill.target) {
+                ("LiberatorAG", Some(target)) => (target, LIBERATOR_ZONE_RADIUS),
+                _ => (kill.pos, range + bonus + kill.radius),
+            };
+            circles.push(RangeCircle {
+                player: kill.player,
+                unit: kill.pos,
+                center,
+                radius,
+            });
+        }
+        circles
+    }
+
     /// The unit type of the player that killed the most enemy units up to the time.
     pub fn most_effective_unit(
         &self,
@@ -493,6 +720,27 @@ mod tests {
     }
 
     #[test]
+    fn it_leaves_out_the_mode_switches() {
+        for ability in [
+            "BurrowLurkerMPDown",
+            "BurrowLurkerMPUp",
+            "SiegeMode",
+            "Unsiege",
+            "LiberatorAGTarget",
+            "LiberatorAAMode",
+            "WidowMineBurrow",
+            "WidowMineUnburrow",
+            "move",
+            "",
+        ] {
+            assert!(is_generic_ability(ability), "{ability}");
+        }
+        for ability in ["Stimpack", "PsiStorm", "FungalGrowth", "YamatoGun"] {
+            assert!(!is_generic_ability(ability), "{ability}");
+        }
+    }
+
+    #[test]
     fn it_cleans_the_clan_tag() {
         assert_eq!(clean_player_name("&lt;TAG&gt;<sp/>Player"), "<TAG> Player");
     }
@@ -549,5 +797,23 @@ mod tests {
             .sum();
         assert_eq!(units, end);
         assert_eq!(data.time_steps().last(), Some(&data.duration_seconds));
+        // A kill bar per kill, at the killer, the counts of the units panel are its kills.
+        let kills: u32 = data
+            .cell_counts(data.duration_seconds, CellEventKind::Kill, None)
+            .values()
+            .sum();
+        assert_eq!(kills as usize, data.kills.len());
+        assert_eq!(
+            data.unit_counts(data.duration_seconds, CellEventKind::Kill, None)
+                .iter()
+                .find(|(unit, _)| unit == "LurkerMP")
+                .map(|(_, count)| *count),
+            Some(109)
+        );
+        // The burrowed Lurkers have a range, 8 in the balance data, more with Seismic Spines.
+        assert_eq!(data.weapon_ranges.get("LurkerMPBurrowed"), Some(&8.));
+        let circles = data.range_circles(data.duration_seconds, Some("LurkerMP"), None);
+        assert!(!circles.is_empty());
+        assert!(circles.iter().all(|circle| circle.radius >= 8.));
     }
 }

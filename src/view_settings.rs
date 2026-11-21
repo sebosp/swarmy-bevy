@@ -1,6 +1,6 @@
 //! The settings of swarmy-bevy kept between runs, in `swarmy-bevy/settings.json` of the config
-//! directory (`~/.config` on Linux): the size of the text and of the panels, changed in Settings
-//! or with Ctrl+= and Ctrl+- (Ctrl+0 resets it), as in swarmy.
+//! directory (`~/.config` on Linux): the size of the text and of the panels, changed with Ctrl+=
+//! and Ctrl+- (Ctrl+0 resets it), as in swarmy.
 
 use bevy::prelude::*;
 use bevy::window::RequestRedraw;

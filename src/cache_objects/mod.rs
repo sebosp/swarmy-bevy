@@ -5,6 +5,8 @@ use crate::MAP_SCALE_FACTOR;
 use crate::MapScene;
 use crate::helipad::{HelipadAssets, PAD_THICKNESS, add_pad_markings};
 use crate::minerals::{Crystal, MineralAssets, crystals_of_field};
+use crate::no_fly_zone::{COLUMN_HEIGHT, NoFlyZoneAssets};
+use crate::rocks::{RockAssets, is_destructible, rock_shape};
 use crate::standard_material_from_gltf_material;
 use crate::swarmy_feathers::{DisplayInfoOnClick, update_info_on_click};
 use crate::t3_height_map::{CELL_HEIGHT_MULTIPLIER, terrain_top};
@@ -16,8 +18,6 @@ pub mod doodas;
 // A few Object Units.
 pub const XEL_NAGA_TOWER_HEIGHT: f32 = 25.0;
 pub const XEL_NAGA_TOWER_RADIUS: f32 = 0.5;
-pub const DESTRUCTIBLE_ROCKS_HEIGHT: f32 = 5.0;
-pub const DESTRUCTIBLE_ROCKS_RADIUS: f32 = 5.0;
 
 pub const UNKNOWN_OBJECT_SIZE: f32 = 1.0;
 
@@ -30,12 +30,15 @@ pub const GEYSER_SIZE: [f32; 3] = [3.0, 0.6, 3.0];
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RockTexture;
 
-/// The gas of a geyser: a glowing green vent on its top.
+/// The gas of a geyser: a glowing vent in the middle of its ring, green, violet for a rich geyser
+/// (see [`crate::geyser_gas`]).
 #[derive(Component, Default)]
-pub struct GeyserGas;
+pub struct GeyserGas {
+    pub rich: bool,
+}
 
 // Testing Object Points.
-pub const NO_FLY_ZONE_HEIGHT: f32 = 25.0;
+/// The radius of a no fly zone drawn, by its soft pathing radius.
 pub const NO_FLY_ZONE_RADIUS: f32 = 0.5;
 
 /// A resources that contains the Objects XML file contents mirror copy for Bevy.
@@ -174,10 +177,11 @@ pub struct SpacePlatformGeyserMaterial;
 #[type_path = "api"]
 pub struct XelNagaTowerMaterial;
 
+/// A destructible rock, debris or plates, see [`crate::rocks`].
 #[derive(Component, Default, Reflect, Debug)]
 #[reflect(Component, Default)]
 #[type_path = "api"]
-pub struct DestructibleRockEx1DiagonalHugeBLURMaterial;
+pub struct DestructibleRockMaterial;
 
 #[derive(Component, Default, Reflect, Debug)]
 #[reflect(Component, Default)]
@@ -223,6 +227,8 @@ pub fn load_cache_objects(
     placed_objects: Res<PlacedObjectsResource>,
     minerals: Res<MineralAssets>,
     helipads: Res<HelipadAssets>,
+    mut rocks: ResMut<RockAssets>,
+    mut no_fly_zones: ResMut<NoFlyZoneAssets>,
     mut loaded: Local<bool>,
 ) -> Result<(), BevyError> {
     // Only do this once
@@ -246,9 +252,23 @@ pub fn load_cache_objects(
         MAP_SCALE_FACTOR,
         MAP_SCALE_FACTOR,
     ))));
-    let geyser_mesh = Mesh3d(meshes.add(Cuboid::from_size(
-        Vec3::from_array(GEYSER_SIZE) * MAP_SCALE_FACTOR,
-    )));
+    // A geyser is a ring of rock around its glowing vent (the gas rises from it), no block.
+    let geyser_mesh = Mesh3d(
+        meshes.add(crate::baked_light::bake_smooth_light(
+            Torus::new(
+                GEYSER_SIZE[0] * 0.3 * MAP_SCALE_FACTOR,
+                GEYSER_SIZE[0] * 0.5 * MAP_SCALE_FACTOR,
+            )
+            .mesh()
+            .build()
+            .scaled_by(Vec3::new(1., GEYSER_SIZE[1] / GEYSER_SIZE[0] * 3., 1.)),
+        )),
+    );
+    let geyser_material = MeshMaterial3d(materials.add(StandardMaterial {
+        base_color: Color::srgb(0.36, 0.33, 0.3),
+        unlit: true,
+        ..default()
+    }));
     let gas_mesh = Mesh3d(meshes.add(Cylinder::new(
         GEYSER_SIZE[0] * 0.3 * MAP_SCALE_FACTOR,
         0.04 * MAP_SCALE_FACTOR,
@@ -258,13 +278,14 @@ pub fn load_cache_objects(
         emissive: LinearRgba::rgb(0.3, 2.0, 0.5),
         ..default()
     }));
+    let rich_gas_material = MeshMaterial3d(materials.add(StandardMaterial {
+        base_color: Color::srgb(0.65, 0.35, 0.95),
+        emissive: LinearRgba::rgb(1.2, 0.35, 2.0),
+        ..default()
+    }));
     let xel_naga_mesh = Mesh3d(meshes.add(Cylinder::new(
         XEL_NAGA_TOWER_RADIUS * MAP_SCALE_FACTOR,
         XEL_NAGA_TOWER_HEIGHT * MAP_SCALE_FACTOR,
-    )));
-    let destructible_rock_ex1_diagonal_huge_blur_material_mesh = Mesh3d(meshes.add(Cylinder::new(
-        DESTRUCTIBLE_ROCKS_RADIUS * MAP_SCALE_FACTOR,
-        DESTRUCTIBLE_ROCKS_HEIGHT * MAP_SCALE_FACTOR,
     )));
     for unit in &placed_objects.units {
         tracing::info!("{:?}", unit);
@@ -281,6 +302,33 @@ pub fn load_cache_objects(
                 "Unexpected number of tokens for unit position typed: {}",
                 unit.unit_kind
             );
+            continue;
+        }
+        if is_destructible(&unit.unit_kind) {
+            // A pile of rocks, debris or plates on a patch of rubble, see [`crate::rocks`].
+            let (x, y) = (unit_pos[0], unit_pos[1]);
+            let cell_height = t3_height_map_res
+                .data
+                .get(y as usize * t3_height_map_res.width + x as usize)
+                .copied()
+                .unwrap_or_default();
+            let shape = rock_shape(&unit.unit_kind);
+            let origin = Vec3::new(
+                MAP_SCALE_FACTOR * y,
+                terrain_top(cell_height as f32),
+                MAP_SCALE_FACTOR * x,
+            );
+            commands
+                .spawn((
+                    DestructibleRockMaterial,
+                    rocks.rubble(&shape, &mut meshes),
+                    Transform::from_translation(origin),
+                    Children::spawn(SpawnIter(rocks.pieces(&shape, origin).into_iter())),
+                    ObjectUnitComponent,
+                    DisplayInfoOnClick,
+                    Name(format!("{}:{}", unit.unit_kind, unit.id).into()),
+                ))
+                .observe(update_info_on_click);
             continue;
         }
         let Some(unit_handle) = gltf.named_materials.get(unit.unit_kind.as_str()) else {
@@ -329,17 +377,29 @@ pub fn load_cache_objects(
                 )),
             )
         };
-        let geyser_transform = on_terrain(GEYSER_SIZE[1]);
+        let geyser_transform = on_terrain(0.);
         let xel_naga_transform = Transform::from_xyz(
             MAP_SCALE_FACTOR * y,
             XEL_NAGA_TOWER_HEIGHT * 0.5 * MAP_SCALE_FACTOR,
             MAP_SCALE_FACTOR * x,
         );
-        let destructible_rock_ex1_diagonal_huge_blur_material_transform = Transform::from_xyz(
-            MAP_SCALE_FACTOR * y,
-            DESTRUCTIBLE_ROCKS_HEIGHT * 0.5 * MAP_SCALE_FACTOR,
-            MAP_SCALE_FACTOR * x,
-        );
+        // The vent of a geyser, in the middle of its ring, a little above the ground.
+        let geyser = |material: MeshMaterial3d<StandardMaterial>, rich: bool| {
+            (
+                RockTexture,
+                geyser_mesh.clone(),
+                geyser_material.clone(),
+                geyser_transform,
+                children![(
+                    GeyserGas { rich },
+                    ObjectUnitComponent,
+                    gas_mesh.clone(),
+                    material,
+                    Transform::from_xyz(0., 0.05 * MAP_SCALE_FACTOR, 0.),
+                    Pickable::IGNORE,
+                )],
+            )
+        };
         let mut spawned = match unit.unit_kind.as_ref() {
             "RichMineralField750" => {
                 commands.spawn((RichMineralField750Material, field(Crystal::Gold)))
@@ -349,60 +409,20 @@ pub fn load_cache_objects(
             "MineralField" => commands.spawn((MineralFieldMaterial, field(Crystal::Blue))),
             "RichVespeneGeyser" => commands.spawn((
                 RichVespeneGeyserMaterial,
-                RockTexture,
-                geyser_mesh.clone(),
-                unit_material,
-                geyser_transform,
-                children![(
-                    GeyserGas,
-                    ObjectUnitComponent,
-                    gas_mesh.clone(),
-                    gas_material.clone(),
-                    Transform::from_xyz(0., GEYSER_SIZE[1] * 0.5 * MAP_SCALE_FACTOR, 0.),
-                    Pickable::IGNORE,
-                )],
+                geyser(rich_gas_material.clone(), true),
             )),
-            "VespeneGeyser" => commands.spawn((
-                VespeneGeyserMaterial,
-                RockTexture,
-                geyser_mesh.clone(),
-                unit_material,
-                geyser_transform,
-                children![(
-                    GeyserGas,
-                    ObjectUnitComponent,
-                    gas_mesh.clone(),
-                    gas_material.clone(),
-                    Transform::from_xyz(0., GEYSER_SIZE[1] * 0.5 * MAP_SCALE_FACTOR, 0.),
-                    Pickable::IGNORE,
-                )],
-            )),
+            "VespeneGeyser" => {
+                commands.spawn((VespeneGeyserMaterial, geyser(gas_material.clone(), false)))
+            }
             "SpacePlatformGeyser" => commands.spawn((
                 SpacePlatformGeyserMaterial,
-                RockTexture,
-                geyser_mesh.clone(),
-                unit_material,
-                geyser_transform,
-                children![(
-                    GeyserGas,
-                    ObjectUnitComponent,
-                    gas_mesh.clone(),
-                    gas_material.clone(),
-                    Transform::from_xyz(0., GEYSER_SIZE[1] * 0.5 * MAP_SCALE_FACTOR, 0.),
-                    Pickable::IGNORE,
-                )],
+                geyser(gas_material.clone(), false),
             )),
             "XelNagaTower" => commands.spawn((
                 XelNagaTowerMaterial,
                 xel_naga_mesh.clone(),
                 unit_material,
                 xel_naga_transform,
-            )),
-            "DestructibleRockEx1DiagonalHugeBLUR" => commands.spawn((
-                DestructibleRockEx1DiagonalHugeBLURMaterial,
-                destructible_rock_ex1_diagonal_huge_blur_material_mesh.clone(),
-                unit_material,
-                destructible_rock_ex1_diagonal_huge_blur_material_transform,
             )),
             _ => {
                 tracing::warn!("Unhandled unit_kind: {}", unit.unit_kind);
@@ -468,10 +488,6 @@ pub fn load_cache_objects(
             MeshMaterial3d(materials.add(standard_material_from_gltf_material(unit_gltf_material)));
         let pathing_radius_soft = object_point.pathing_radius_soft;
         let _pathing_radius_hard = object_point.pathing_radius_hard;
-        let cylinder_mesh = Mesh3d(meshes.add(Cylinder::new(
-            pathing_radius_soft * NO_FLY_ZONE_RADIUS * MAP_SCALE_FACTOR,
-            NO_FLY_ZONE_HEIGHT * MAP_SCALE_FACTOR,
-        )));
         let cylinder_transform = Transform::from_xyz(
             MAP_SCALE_FACTOR * y,
             z + cell_height as f32 * CELL_HEIGHT_MULTIPLIER * MAP_SCALE_FACTOR,
@@ -480,12 +496,22 @@ pub fn load_cache_objects(
         // TODO: We should use the alpha channel, dunno if we need glsl for that tho because it's
         // being set from blender and exported to gltf.
         let mut spawned = match object_point.kind.as_str() {
-            "NoFlyZone" => commands.spawn((
-                NoFlyZoneMaterial,
-                cylinder_mesh,
-                object_point_material,
-                cylinder_transform,
-            )),
+            "NoFlyZone" => {
+                // A "no" sign on the ground under a faint column of air, see
+                // [`crate::no_fly_zone`].
+                let (column, children) =
+                    no_fly_zones.zone(pathing_radius_soft * NO_FLY_ZONE_RADIUS, &mut meshes);
+                commands.spawn((
+                    NoFlyZoneMaterial,
+                    column,
+                    Transform::from_xyz(
+                        MAP_SCALE_FACTOR * y,
+                        terrain_top(cell_height as f32) + COLUMN_HEIGHT * 0.5 * MAP_SCALE_FACTOR,
+                        MAP_SCALE_FACTOR * x,
+                    ),
+                    Children::spawn(SpawnIter(children.into_iter())),
+                ))
+            }
             "StartLoc" => {
                 // A landing pad on the ground, see [`crate::helipad`].
                 let mut pad = commands.spawn((
@@ -504,7 +530,7 @@ pub fn load_cache_objects(
             _ => commands.spawn((
                 UnknownObjectPointMaterial,
                 unknown_object_mesh.clone(),
-                cylinder_mesh,
+                object_point_material,
                 cylinder_transform,
             )),
         };
