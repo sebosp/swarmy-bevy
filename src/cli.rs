@@ -32,7 +32,7 @@ pub struct Args {
     pub map_caches: Option<String>,
     /// The map to draw, a comma-separated list of the cache ids (sha256) of the map in the map
     /// caches directory, as stored in a replay. Not needed with --replay, the replay has them,
-    /// unless it was played on a local map (AI Arena): the map file is then <id>.s2ma.
+    /// unless it was played on a local map (AI Arena): the map file is then `<id>.s2ma`.
     #[arg(
         short = 'i',
         long = "map-cache-ids",
