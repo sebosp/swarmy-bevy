@@ -22,6 +22,8 @@ pub struct MapPlugin {
 
 impl Plugin for MapPlugin {
     fn build(&self, app: &mut App) {
+        app.init_resource::<crate::SelectedEntity>()
+            .add_plugins(crate::collapsible::CollapsiblePlugin);
         app.add_systems(PreStartup, load_cache_depot_map_resources);
         app.add_systems(Startup, MapPlugin::scene.spawn());
         app.add_systems(
@@ -65,6 +67,8 @@ impl Plugin for MapPlugin {
             crate::geyser_gas::GeyserGasPlugin,
             crate::minerals::MineralsPlugin,
             crate::helipad::HelipadPlugin,
+            crate::rocks::RocksPlugin,
+            crate::no_fly_zone::NoFlyZonePlugin,
         ));
         app.add_systems(Startup, show_map_title);
     }
@@ -279,6 +283,12 @@ pub fn load_cache_depot_map_resources(
             commands.insert_resource(t3_height_map_res);
             let document_header_res = DocumentHeaderResource::from(document_header);
             commands.insert_resource(document_header_res);
+            match map_cache.pathing {
+                Some(pathing) => {
+                    commands.insert_resource(crate::pathing::PathingResource(pathing));
+                }
+                None => tracing::warn!("The map cache has no pathing"),
+            }
             let placed_objects = map_cache.placed_objects;
             tracing::debug!("placed objects: {:?}", placed_objects);
             let placed_obj_res: PlacedObjectsResource = placed_objects.into();

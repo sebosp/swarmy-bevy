@@ -1,21 +1,24 @@
 //! Draws the [`ReplayData`]: per aggregated cell and player a bar, in the color of the player, for
-//! the units died or born up to the current time (a dropdown chooses, the units died by default),
-//! of every unit type or of the one chosen in the units panel, on top of the flattened terrain,
-//! drawn in grays so that its levels do not look like the players. The time moves with the < >
-//! buttons or the Left/Right arrows (Home/End for the start/end of the game). A panel shows the
-//! players with their color, result, upgrades and most effective unit and ability.
+//! the units died, born or the kills (at the killer) up to the current time (a dropdown chooses,
+//! the deaths by default), of every unit type or of the one chosen in the units panel, on top of
+//! the flattened terrain, drawn in grays so that its levels do not look like the players. The time
+//! moves with the < > buttons or the Left/Right arrows (Home/End for the start/end of the game). A
+//! panel shows the players with their color, result and most effective unit and ability, the
+//! [`timeline`](super::timeline) their upgrades.
 
-use super::{AGGREGATE_CELLS, CellEventKind, ReplayData, game_time};
-use crate::MAP_SCALE_FACTOR;
-use crate::SelectedObjectName;
+use super::{AGGREGATE_CELLS, CellEventKind, RangeCircle, ReplayData, game_time};
+use crate::collapsible::{Pointing, triangle_image};
+use crate::swarmy_feathers::SelectionIcons;
 use crate::swarmy_feathers::{DisplayInfoOnClick, update_info_on_click};
 use crate::t3_height_map::{FLAT_TERRAIN_LEVEL, terrain_top};
+use crate::{MAP_SCALE_FACTOR, SelectedEntity, SelectedObjectName};
 use bevy::asset::RenderAssetUsages;
 use bevy::color::palettes;
 use bevy::feathers::controls::*;
 use bevy::feathers::theme::{ThemeBackgroundColor, ThemedText};
 use bevy::feathers::tokens;
 use bevy::image::{CompressedImageFormats, ImageSampler, ImageType};
+use bevy::math::Isometry3d;
 use bevy::prelude::*;
 use bevy::ui_widgets::Activate;
 use std::collections::HashMap;
@@ -23,12 +26,23 @@ use std::collections::HashMap;
 /// The tallest bar, for the cell with the most units born or died in the game, in world units.
 pub const MAX_BAR_HEIGHT: f32 = 4.;
 
-/// The width of a bar in map cells.
-const BAR_WIDTH_CELLS: f32 = AGGREGATE_CELLS as f32 * 0.8;
+/// The side of the square base of a bar as a part of the side of its cell: a tenth of the area
+/// of the cell, so that the bars of the players in the same cell stand apart.
+const BAR_SIDE: f32 = 0.316;
 
-/// The depth of the bars of a cell in map cells: one player's bar takes all of it, the bars of
-/// several players in the same cell share it, one after the other.
-const BAR_DEPTH_CELLS: f32 = AGGREGATE_CELLS as f32 * 0.8;
+/// A bar never takes more than this part of its slot, there is a gap between the bars.
+const BAR_SLOT_FILL: f32 = 0.8;
+
+/// The glow of the bars through the bloom, and of the bars of a chosen unit type at the top of
+/// their pulse, which lasts [`PULSE_SECONDS`].
+const BAR_GLOW: f32 = 0.6;
+const CHOSEN_GLOW: f32 = 2.4;
+const PULSE_SECONDS: f32 = 1.6;
+
+/// The shared material of the bars of each player and its color, the bars of a chosen unit type
+/// pulse by changing these few materials, not the bars.
+#[derive(Resource, Default)]
+struct BarMaterials(Vec<(Handle<StandardMaterial>, LinearRgba)>);
 
 /// The unit types shown in the units panel, the most frequent ones.
 const MAX_PANEL_UNITS: usize = 24;
@@ -48,17 +62,24 @@ impl Plugin for ReplayPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<IconImages>()
             .init_resource::<BarSelection>()
+            .init_resource::<RangeCircles>()
+            .init_resource::<SelectedEntity>()
             .add_systems(Startup, (init_replay_time, spawn_bars))
             .add_systems(Startup, replay_panel.spawn())
             .add_systems(
                 Update,
                 (
                     step_time_with_keys,
-                    (update_time_text, update_players_panel).run_if(resource_changed::<ReplayTime>),
+                    update_time_text.run_if(resource_changed::<ReplayTime>),
+                    // It checks whether the time or the selection changed.
+                    update_players_panel,
                     // They check whether the time or the selection changed.
                     (update_bars, update_units_panel, update_bar_kind_text),
+                    (update_range_circles, draw_range_circles).chain(),
+                    pulse_chosen_bars,
                 ),
-            );
+            )
+            .add_plugins(super::timeline::TimelinePlugin);
     }
 }
 
@@ -84,7 +105,7 @@ impl ReplayTime {
 #[derive(Resource, Debug, Default)]
 pub struct ReplayStartSeconds(pub Option<u32>);
 
-/// What the bars count: the units died or born, of every unit type or of one.
+/// What the bars count: the units died or born or the kills, of every unit type or of one.
 #[derive(Resource, Debug, Clone, PartialEq, Eq)]
 pub struct BarSelection {
     pub kind: CellEventKind,
@@ -102,11 +123,45 @@ impl Default for BarSelection {
 
 impl BarSelection {
     fn kind_label(&self) -> &'static str {
+        kind_label(self.kind)
+    }
+
+    /// The count of a bar, i.e. `3 units died`.
+    fn count_label(&self, count: u32) -> String {
         match self.kind {
-            CellEventKind::Died => "Units died",
-            CellEventKind::Born => "Units born",
+            CellEventKind::Died => format!("{count} units died"),
+            CellEventKind::Born => format!("{count} units born"),
+            CellEventKind::Kill => format!("{count} kills"),
         }
     }
+}
+
+/// The caption of the dropdown and of its choices.
+fn kind_label(kind: CellEventKind) -> &'static str {
+    match kind {
+        CellEventKind::Died => "Deaths",
+        CellEventKind::Born => "Births",
+        CellEventKind::Kill => "Kills",
+    }
+}
+
+/// Where the bar of a player stands in its cell, from the center of the cell, and the side of its
+/// base, in parts of the side of the cell. The cell has a slot per player, their number rounded up
+/// to a power of 2 (3 players have 4 slots, 2 by 2): a player's bar is always in the same slot and
+/// never hides another.
+pub fn bar_slot(player: usize, players: usize) -> (Vec2, f32) {
+    let slots = players.max(1).next_power_of_two();
+    let columns = 1usize << slots.trailing_zeros().div_ceil(2);
+    let rows = slots / columns;
+    let (column, row) = (player % columns, (player / columns) % rows);
+    let offset = Vec2::new(
+        (column as f32 + 0.5) / columns as f32 - 0.5,
+        (row as f32 + 0.5) / rows as f32 - 0.5,
+    );
+    let side = BAR_SIDE
+        .min(BAR_SLOT_FILL / columns as f32)
+        .min(BAR_SLOT_FILL / rows as f32);
+    (offset, side)
 }
 
 /// The bar of a player in an aggregated cell.
@@ -135,10 +190,10 @@ struct ReplayPlayersPanel;
 
 /// The icon textures decoded from the DDS files embedded by s2protocol.
 #[derive(Resource, Default)]
-struct IconImages(HashMap<String, Option<Handle<Image>>>);
+pub(super) struct IconImages(HashMap<String, Option<Handle<Image>>>);
 
 impl IconImages {
-    fn get(&mut self, icon: &str, images: &mut Assets<Image>) -> Option<Handle<Image>> {
+    pub(super) fn get(&mut self, icon: &str, images: &mut Assets<Image>) -> Option<Handle<Image>> {
         self.0
             .entry(icon.to_string())
             .or_insert_with(|| {
@@ -195,9 +250,8 @@ fn spawn_bars(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    let width = BAR_WIDTH_CELLS * MAP_SCALE_FACTOR;
-    let depth = BAR_DEPTH_CELLS * MAP_SCALE_FACTOR;
-    let mesh = Mesh3d(meshes.add(Cuboid::from_size(Vec3::new(width, 1., depth))));
+    let cell_side = AGGREGATE_CELLS as f32 * MAP_SCALE_FACTOR;
+    let mesh = Mesh3d(meshes.add(Cuboid::from_size(Vec3::ONE)));
     let player_materials: Vec<_> = replay
         .players
         .iter()
@@ -206,16 +260,24 @@ fn spawn_bars(
             MeshMaterial3d(materials.add(StandardMaterial {
                 base_color: color,
                 // A little glow with the bloom.
-                emissive: color.to_linear() * 0.6,
+                emissive: color.to_linear() * BAR_GLOW,
                 ..default()
             }))
         })
         .collect();
+    commands.insert_resource(BarMaterials(
+        player_materials
+            .iter()
+            .zip(&replay.players)
+            .map(|(material, player)| (material.0.clone(), player_color(player.color).to_linear()))
+            .collect(),
+    ));
     for (cell, player) in replay.cell_players() {
         let (world_x, world_z) = cell_center(cell);
         let Some(material) = player_materials.get(player) else {
             continue;
         };
+        let (offset, side) = bar_slot(player, replay.players.len());
         commands
             .spawn((
                 CellBar { cell, player },
@@ -223,7 +285,12 @@ fn spawn_bars(
                 DisplayInfoOnClick,
                 mesh.clone(),
                 material.clone(),
-                Transform::from_xyz(world_x, terrain_top(FLAT_TERRAIN_LEVEL), world_z),
+                Transform::from_xyz(
+                    world_x + offset.x * cell_side,
+                    terrain_top(FLAT_TERRAIN_LEVEL),
+                    world_z + offset.y * cell_side,
+                )
+                .with_scale(Vec3::new(side * cell_side, 1., side * cell_side)),
                 Visibility::Hidden,
             ))
             .observe(update_info_on_click)
@@ -245,14 +312,6 @@ fn update_bars(
     let counts = replay.cell_counts(seconds, selection.kind, unit);
     let max_count = replay.max_cell_count(selection.kind, unit).max(1) as f32;
     let ground = terrain_top(FLAT_TERRAIN_LEVEL);
-    // The players with units in each cell at this time: a bar alone takes the whole cell.
-    let mut cell_players: HashMap<(u32, u32), Vec<usize>> = HashMap::new();
-    for ((cell, player), count) in &counts {
-        if *count > 0 {
-            cell_players.entry(*cell).or_default().push(*player);
-        }
-    }
-    let depth = BAR_DEPTH_CELLS * MAP_SCALE_FACTOR;
     for (bar, mut transform, mut visibility, mut name) in &mut bars {
         let count = counts
             .get(&(bar.cell, bar.player))
@@ -266,18 +325,6 @@ fn update_bars(
         let height = count as f32 / max_count * MAX_BAR_HEIGHT;
         transform.scale.y = height;
         transform.translation.y = ground + height / 2.;
-        let present = cell_players
-            .get(&bar.cell)
-            .map(Vec::as_slice)
-            .unwrap_or_default();
-        let shared = present.len().max(1) as f32;
-        let position = present
-            .iter()
-            .position(|player| *player == bar.player)
-            .unwrap_or(0) as f32;
-        transform.scale.z = 1. / shared;
-        let (_, center_z) = cell_center(bar.cell);
-        transform.translation.z = center_z + (position - (shared - 1.) / 2.) * depth / shared;
         let (x, y) = (bar.cell.0 * AGGREGATE_CELLS, bar.cell.1 * AGGREGATE_CELLS);
         let player = replay
             .players
@@ -294,12 +341,11 @@ fn update_bars(
             .collect::<Vec<_>>()
             .join(", ");
         name.set(format!(
-            "Cells ({x}, {y}) to ({}, {}) at {}: {player}, {} {}: {units}",
+            "Cells ({x}, {y}) to ({}, {}) at {}: {player}, {}: {units}",
             x + AGGREGATE_CELLS - 1,
             y + AGGREGATE_CELLS - 1,
             game_time(seconds),
-            count,
-            selection.kind_label().to_lowercase(),
+            selection.count_label(count),
         ));
     }
 }
@@ -314,18 +360,25 @@ fn update_bar_kind_text(
     text.0 = selection.kind_label().to_string();
 }
 
-fn show_units_died(_activate: On<Activate>, mut selection: ResMut<BarSelection>) {
+fn show_deaths(_activate: On<Activate>, mut selection: ResMut<BarSelection>) {
     selection.kind = CellEventKind::Died;
 }
 
-fn show_units_born(_activate: On<Activate>, mut selection: ResMut<BarSelection>) {
+fn show_births(_activate: On<Activate>, mut selection: ResMut<BarSelection>) {
     selection.kind = CellEventKind::Born;
 }
 
+fn show_kills(_activate: On<Activate>, mut selection: ResMut<BarSelection>) {
+    selection.kind = CellEventKind::Kill;
+}
+
 /// The unit type of a units panel entry, clicking it shows only its bars, clicking it again shows
-/// every unit type.
+/// every unit type. The most effective unit of a player shows its kills.
 #[derive(Component, Debug, Clone)]
-struct UnitFilterButton(Option<String>);
+struct UnitFilterButton {
+    unit: String,
+    kills: bool,
+}
 
 fn toggle_unit_filter(
     click: On<PointerClick>,
@@ -334,16 +387,21 @@ fn toggle_unit_filter(
     mut selection: ResMut<BarSelection>,
 ) {
     // The click can be on the icon or the label of the entry.
-    let Some(UnitFilterButton(unit)) = std::iter::once(click.entity)
+    let Some(UnitFilterButton { unit, kills }) = std::iter::once(click.entity)
         .chain(parents.iter_ancestors(click.entity))
         .find_map(|entity| buttons.get(entity).ok())
     else {
         return;
     };
-    selection.unit = if selection.unit == *unit {
+    if *kills && selection.kind != CellEventKind::Kill {
+        selection.kind = CellEventKind::Kill;
+        selection.unit = Some(unit.clone());
+        return;
+    }
+    selection.unit = if selection.unit.as_ref() == Some(unit) {
         None
     } else {
-        unit.clone()
+        Some(unit.clone())
     };
 }
 
@@ -374,25 +432,6 @@ fn update_units_panel(
         .collect();
     commands.entity(*panel).despawn_related::<Children>();
     commands.entity(*panel).with_children(|panel| {
-        let all_color = if selection.unit.is_none() {
-            Color::WHITE
-        } else {
-            Color::from(palettes::tailwind::GRAY_400)
-        };
-        panel
-            .spawn((
-                Node {
-                    padding: UiRect::axes(px(6), px(4)),
-                    border: UiRect::all(px(1)),
-                    ..default()
-                },
-                BorderColor::all(all_color),
-                UnitFilterButton(None),
-                Name::new("Show every unit type"),
-            ))
-            .observe(show_name_on_hover)
-            .observe(toggle_unit_filter)
-            .with_child((small_text("All", all_color), Pickable::IGNORE));
         for (image, unit, count) in units {
             let selected = selection.unit.as_deref() == Some(unit.as_str());
             let mut entry = panel.spawn((
@@ -401,7 +440,10 @@ fn update_units_panel(
                     ..default()
                 },
                 BorderColor::all(if selected { Color::WHITE } else { Color::NONE }),
-                UnitFilterButton(Some(unit.clone())),
+                UnitFilterButton {
+                    unit: unit.clone(),
+                    kills: false,
+                },
             ));
             entry.observe(toggle_unit_filter);
             entry.with_children(|entry| {
@@ -409,7 +451,12 @@ fn update_units_panel(
                     entry,
                     image,
                     count.to_string(),
-                    format!("{unit}: {count}, click to show only its bars"),
+                    match selection.kind {
+                        CellEventKind::Kill => {
+                            format!("{unit}: {count} kills, click to show only its bars")
+                        }
+                        _ => format!("{unit}: {count}, click to show only its bars"),
+                    },
                 );
             });
         }
@@ -461,6 +508,8 @@ fn replay_panel() -> impl SceneList {
             padding: px(8),
             row_gap: px(8),
         }
+        // Above the upgrades timeline at the bottom when the window is low.
+        GlobalZIndex(16)
         ThemeBackgroundColor(tokens::WINDOW_BG)
         Children [
             Node {
@@ -489,9 +538,9 @@ fn replay_panel() -> impl SceneList {
             @FeathersMenu
             Children [
                 @FeathersMenuButton {
-                    @caption: bsn! { Text("Units died") ThemedText BarKindText }
+                    @caption: bsn! { Text("Deaths") ThemedText BarKindText }
                 }
-                AccessibleLabel("Units died or born")
+                AccessibleLabel("The bars count the deaths, the births or the kills")
                 Node {
                     flex_grow: 1.0,
                 }
@@ -499,14 +548,19 @@ fn replay_panel() -> impl SceneList {
                 @FeathersMenuPopup
                 Children [
                     @FeathersMenuItem {
-                        @caption: bsn! { Text("Units died") ThemedText }
+                        @caption: bsn! { Text("Deaths") ThemedText }
                     }
-                    on(show_units_died)
+                    on(show_deaths)
                     --
                     @FeathersMenuItem {
-                        @caption: bsn! { Text("Units born") ThemedText }
+                        @caption: bsn! { Text("Births") ThemedText }
                     }
-                    on(show_units_born)
+                    on(show_births)
+                    --
+                    @FeathersMenuItem {
+                        @caption: bsn! { Text("Kills") ThemedText }
+                    }
+                    on(show_kills)
                 ]
             ]
             --
@@ -541,7 +595,7 @@ fn show_name_on_hover(
     }
 }
 
-fn small_text(text: impl Into<String>, color: Color) -> impl Bundle {
+pub(super) fn small_text(text: impl Into<String>, color: Color) -> impl Bundle {
     (
         Text::new(text),
         TextColor(color),
@@ -599,26 +653,35 @@ fn spawn_icon(
         });
 }
 
-/// Rebuilds the players: their name in their color, the result, the upgrades finished so far with
-/// their time, and the unit and the ability with the most kills so far.
-fn update_players_panel(
-    mut commands: Commands,
-    replay: Res<ReplayData>,
-    time: Res<ReplayTime>,
-    panel: Single<Entity, With<ReplayPlayersPanel>>,
-    mut icons: ResMut<IconImages>,
-    mut images: ResMut<Assets<Image>>,
-    mut markers: Local<Option<ResultMarkers>>,
-) {
-    let markers = markers.get_or_insert_with(|| ResultMarkers::new(&mut images));
-    let seconds = time.seconds();
-    // The winners first, then the losers, as in swarmy.
+/// The players, the winners first, then the losers, as in swarmy.
+pub(super) fn player_order(replay: &ReplayData) -> Vec<usize> {
     let mut order: Vec<usize> = (0..replay.players.len()).collect();
     order.sort_by_key(|idx| match replay.players[*idx].result.as_str() {
         "Win" => 0,
         "Loss" => 1,
         _ => 2,
     });
+    order
+}
+
+/// Rebuilds the players: their name in their color, the result, and the unit and the ability with
+/// the most kills so far. Their upgrades are in the timeline at the bottom.
+fn update_players_panel(
+    mut commands: Commands,
+    replay: Res<ReplayData>,
+    time: Res<ReplayTime>,
+    selection: Res<BarSelection>,
+    panel: Single<Entity, With<ReplayPlayersPanel>>,
+    mut icons: ResMut<IconImages>,
+    mut images: ResMut<Assets<Image>>,
+    mut markers: Local<Option<ResultMarkers>>,
+) {
+    if !time.is_changed() && !selection.is_changed() {
+        return;
+    }
+    let markers = markers.get_or_insert_with(|| ResultMarkers::new(&mut images));
+    let seconds = time.seconds();
+    let order = player_order(&replay);
     let win_marker = markers.win.clone();
     let loss_marker = markers.loss.clone();
     commands.entity(*panel).despawn_related::<Children>();
@@ -633,17 +696,6 @@ fn update_players_panel(
                 "Loss" => Some(loss_marker.clone()),
                 _ => None,
             };
-            let upgrades = replay.upgrades_until(idx, seconds);
-            let upgrade_icons: Vec<_> = upgrades
-                .iter()
-                .map(|upgrade| {
-                    let image = upgrade
-                        .icon
-                        .as_deref()
-                        .and_then(|icon| icons.get(icon, &mut images));
-                    (image, *upgrade)
-                })
-                .collect();
             let unit = replay
                 .most_effective_unit(idx, seconds)
                 .map(|(unit, kills)| {
@@ -719,12 +771,37 @@ fn update_players_panel(
                     })
                     .with_children(|effective| {
                         if let Some((image, unit, kills)) = unit {
-                            spawn_icon(
-                                effective,
-                                image,
-                                format!("{kills} kills"),
-                                format!("Most effective unit: {unit}, {kills} kills"),
-                            );
+                            // Clicking it shows the bars of its kills, as the units panel does.
+                            let chosen = selection.kind == CellEventKind::Kill
+                                && selection.unit.as_deref() == Some(unit.as_str());
+                            effective
+                                .spawn((
+                                    Node {
+                                        border: UiRect::all(px(1)),
+                                        ..default()
+                                    },
+                                    BorderColor::all(if chosen {
+                                        Color::WHITE
+                                    } else {
+                                        Color::NONE
+                                    }),
+                                    UnitFilterButton {
+                                        unit: unit.clone(),
+                                        kills: true,
+                                    },
+                                ))
+                                .observe(toggle_unit_filter)
+                                .with_children(|entry| {
+                                    spawn_icon(
+                                        entry,
+                                        image,
+                                        format!("{kills} kills"),
+                                        format!(
+                                            "Most effective unit: {unit}, {kills} kills, click \
+                                             to show where it killed"
+                                        ),
+                                    );
+                                });
                         }
                         if let Some((image, ability, kills)) = ability {
                             spawn_icon(
@@ -734,18 +811,6 @@ fn update_players_panel(
                                 format!(
                                     "Most effective ability: {ability}, {kills} kills by units \
                                      last commanded to use it"
-                                ),
-                            );
-                        }
-                        for (image, upgrade) in upgrade_icons {
-                            spawn_icon(
-                                effective,
-                                image,
-                                game_time(upgrade.seconds),
-                                format!(
-                                    "{} finished at {}",
-                                    upgrade.name,
-                                    game_time(upgrade.seconds)
                                 ),
                             );
                         }
@@ -764,40 +829,10 @@ struct ResultMarkers {
 impl ResultMarkers {
     fn new(images: &mut Assets<Image>) -> Self {
         Self {
-            win: images.add(triangle_image(true, palettes::tailwind::GREEN_500)),
-            loss: images.add(triangle_image(false, palettes::tailwind::RED_500)),
+            win: images.add(triangle_image(Pointing::Up, palettes::tailwind::GREEN_500)),
+            loss: images.add(triangle_image(Pointing::Down, palettes::tailwind::RED_500)),
         }
     }
-}
-
-/// A triangle pointing up or down in a square image, transparent around it.
-fn triangle_image(up: bool, color: Srgba) -> Image {
-    const SIZE: usize = 32;
-    let [r, g, b, a] = color.to_u8_array();
-    let mut data = vec![0u8; SIZE * SIZE * 4];
-    for row in 0..SIZE {
-        // The width of the triangle grows from its point to its base.
-        let from_point = if up { row } else { SIZE - 1 - row };
-        let half = (from_point as f32 + 1.) / 2.;
-        for column in 0..SIZE {
-            let distance = (column as f32 + 0.5 - SIZE as f32 / 2.).abs();
-            if distance <= half {
-                let idx = (row * SIZE + column) * 4;
-                data[idx..idx + 4].copy_from_slice(&[r, g, b, a]);
-            }
-        }
-    }
-    Image::new(
-        bevy::render::render_resource::Extent3d {
-            width: SIZE as u32,
-            height: SIZE as u32,
-            depth_or_array_layers: 1,
-        },
-        bevy::render::render_resource::TextureDimension::D2,
-        data,
-        bevy::render::render_resource::TextureFormat::Rgba8UnormSrgb,
-        RenderAssetUsages::default(),
-    )
 }
 
 /// Clicking a bar shows its units with their icons in the selection panel.
@@ -809,7 +844,7 @@ fn show_bar_units(
     replay: Res<ReplayData>,
     time: Res<ReplayTime>,
     selection: Res<BarSelection>,
-    selection_icons: Single<Entity, With<crate::swarmy_feathers::SelectionIcons>>,
+    selection_icons: Single<Entity, With<SelectionIcons>>,
     mut icons: ResMut<IconImages>,
     mut images: ResMut<Assets<Image>>,
 ) {
@@ -836,22 +871,129 @@ fn show_bar_units(
     });
 }
 
+/// The range of the units that killed, of the clicked bar or of the unit type chosen in the units
+/// panel, while the bars count the kills.
+#[derive(Resource, Debug, Default)]
+struct RangeCircles(Vec<RangeCircle>);
+
+fn update_range_circles(
+    replay: Res<ReplayData>,
+    time: Res<ReplayTime>,
+    selection: Res<BarSelection>,
+    selected: Res<SelectedEntity>,
+    bars: Query<&CellBar>,
+    mut circles: ResMut<RangeCircles>,
+) {
+    if !time.is_changed() && !selection.is_changed() && !selected.is_changed() {
+        return;
+    }
+    let unit = selection.unit.as_deref();
+    let bar = selected.0.and_then(|entity| bars.get(entity).ok());
+    circles.0 = match (selection.kind, bar) {
+        (CellEventKind::Kill, Some(bar)) => {
+            replay.range_circles(time.seconds(), unit, Some((bar.cell, bar.player)))
+        }
+        (CellEventKind::Kill, None) if unit.is_some() => {
+            replay.range_circles(time.seconds(), unit, None)
+        }
+        _ => vec![],
+    };
+}
+
+/// The bars of the unit type chosen in the panel breathe: their glow rises and falls through the
+/// bloom so that they stand out, back to the usual glow when no unit type is chosen.
+fn pulse_chosen_bars(
+    time: Res<Time>,
+    selection: Res<BarSelection>,
+    bars: Option<Res<BarMaterials>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut pulsing: Local<bool>,
+) {
+    let Some(bars) = bars else {
+        return;
+    };
+    let chosen = selection.unit.is_some();
+    if !chosen && !*pulsing {
+        return;
+    }
+    *pulsing = chosen;
+    let glow = if chosen {
+        let phase = time.elapsed_secs() / PULSE_SECONDS * std::f32::consts::TAU;
+        BAR_GLOW + (CHOSEN_GLOW - BAR_GLOW) * (0.5 - 0.5 * phase.cos())
+    } else {
+        BAR_GLOW
+    };
+    for (handle, color) in &bars.0 {
+        if let Some(mut material) = materials.get_mut(handle) {
+            material.emissive = *color * glow;
+        }
+    }
+}
+
+/// A map position on the flattened terrain, a little above it, in world coordinates.
+fn ground_point(map: (f32, f32)) -> Vec3 {
+    Vec3::new(
+        map.1 * MAP_SCALE_FACTOR,
+        terrain_top(FLAT_TERRAIN_LEVEL) + 0.01,
+        map.0 * MAP_SCALE_FACTOR,
+    )
+}
+
+/// The circles in a light shade of the color of the player, inside a dark one, so that they are
+/// seen on the light and the dark grays of the terrain; the unit is a small circle, a Liberator is
+/// joined to its zone.
+fn draw_range_circles(circles: Res<RangeCircles>, replay: Res<ReplayData>, mut gizmos: Gizmos) {
+    let flat = Quat::from_rotation_x(std::f32::consts::FRAC_PI_2);
+    let halo = Color::from(palettes::tailwind::NEUTRAL_950);
+    for circle in &circles.0 {
+        let Some(player) = replay.players.get(circle.player) else {
+            continue;
+        };
+        let color = range_color(player.color);
+        let center = ground_point(circle.center);
+        let radius = circle.radius * MAP_SCALE_FACTOR;
+        gizmos
+            .circle(Isometry3d::new(center, flat), radius + 0.015, halo)
+            .resolution(96);
+        gizmos
+            .circle(Isometry3d::new(center, flat), radius, color)
+            .resolution(96);
+        let unit = ground_point(circle.unit);
+        gizmos.circle(Isometry3d::new(unit, flat), 0.06, color);
+        if circle.unit != circle.center {
+            gizmos.line(unit, center, color);
+        }
+    }
+}
+
+/// The color of the player mixed with 35% of white, lighter than the bars on the dark terrain.
+pub fn range_color(color: [u8; 4]) -> Color {
+    let [r, g, b, _] = color;
+    let mix = |channel: u8| (channel as f32 + (255. - channel as f32) * 0.35) / 255.;
+    Color::srgb(mix(r), mix(g), mix(b))
+}
+
 #[cfg(test)]
-mod marker_tests {
+mod slot_tests {
     use super::*;
 
     #[test]
-    fn it_draws_the_triangles_of_the_results() {
-        let up = triangle_image(true, palettes::tailwind::GREEN_500);
-        let data = up.data.as_ref().unwrap();
-        let alpha = |row: usize, column: usize| data[(row * 32 + column) * 4 + 3];
-        // The point at the top, the base at the bottom, transparent around.
-        assert_eq!(alpha(0, 0), 0);
-        assert!(alpha(0, 16) > 0);
-        assert!(alpha(31, 1) > 0);
-        let down = triangle_image(false, palettes::tailwind::RED_500);
-        let data = down.data.as_ref().unwrap();
-        assert!(data[(31 * 32 + 16) * 4 + 3] > 0);
-        assert_eq!(data[(31 * 32) * 4 + 3], 0);
+    fn it_gives_each_player_its_own_slot() {
+        // Alone, a bar is in the middle of its cell, a tenth of its area.
+        let (offset, side) = bar_slot(0, 1);
+        assert_eq!(offset, Vec2::ZERO);
+        assert!((side * side - 0.1).abs() < 0.001);
+        // 3 players have 4 slots, 2 by 2, apart from each other.
+        let slots: Vec<_> = (0..3).map(|player| bar_slot(player, 3)).collect();
+        assert_eq!(slots[0].0, Vec2::new(-0.25, -0.25));
+        assert_eq!(slots[1].0, Vec2::new(0.25, -0.25));
+        assert_eq!(slots[2].0, Vec2::new(-0.25, 0.25));
+        for (offset, side) in &slots {
+            assert!(offset.x.abs() + side / 2. <= 0.5);
+        }
+        // 8 players, 4 by 2, the bars fit in their slots.
+        let (offset, side) = bar_slot(7, 8);
+        assert_eq!(offset, Vec2::new(0.375, 0.25));
+        assert!(side <= 0.25 * BAR_SLOT_FILL + f32::EPSILON);
     }
 }

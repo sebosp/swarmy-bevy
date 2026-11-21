@@ -8,8 +8,8 @@ MapInfo, T3 Height Map, Objects (Units such as XelNagaTowers, Doodas, UnitPoints
 
 ![A replay in swarmy-bevy: the units born and lost of each player over time](docs/replay.png)
 
-The replay bars are per 4x4 cells and player, the units born in the color of the player and the
-units lost in a darker shade next to them. swarmy's
+The replay bars are per 4x4 cells and player, in the color of the player, each player in its own
+slot of the cell. swarmy's
 [walkthrough](https://github.com/sebosp/swarmy#walkthrough) shows it opened from a replay.
 
 The replays are managed via [swarmy](https://github.com/sebosp/swarmy)
@@ -22,20 +22,38 @@ so only `--map-caches` (the map caches directory) is needed. swarmy runs it from
 Replay Detail. Without a map or a replay, swarmy-bevy shows its help.
 
 - The terrain is flattened and drawn in grays, darker the lower.
-- Every 4x4 map cells have a bar per player, in the color of the player, for the units died or
-  born (UnitBorn and UnitInit) up to the current time, a dropdown chooses, the units died by
-  default. Only the units that cost resources count (no Larva, Broodlings, etc). The bars are
-  scaled by the cell with the most units in the game, so they grow over time.
-- The units panel lists the unit types died or born so far with their count, clicking one shows
-  only its bars, clicking it again shows all of them. Clicking a bar shows its unit types.
+- Every 4x4 map cells have a bar per player, in the color of the player, for the units died
+  (Deaths), born (Births, UnitBorn and UnitInit) or the enemy units killed at the position of the
+  killer unit (Kills) up to the current time, a dropdown chooses, the deaths by default
+  (`--replay-bars deaths|births|kills`). Only the units that cost resources count (no Larva,
+  Broodlings, etc), and the deaths are the units lost (s2protocol's `UnitDiedCause::is_loss`): a
+  Drone that becomes a building, templars merged, a MULE or an adept shade that expired, the
+  hallucinations are not deaths. The bars are scaled by the cell with the most units in the game, so they grow
+  over time. A cell has a slot per player (their number rounded up to a power of 2), a bar's base
+  is a tenth of the cell.
+- The units panel lists the unit types so far with their count, clicking one shows only its bars
+  (`--replay-unit SiegeTank`), clicking it again shows all of them. Clicking a bar shows its unit
+  types in the Selection panel at the bottom left, which folds with its arrow.
+- In Kills, a clicked bar or a unit type of Siege Tank (sieged), Liberator (Defender Mode, its zone
+  around the point it was ordered to), Lurker (burrowed), Photon Cannon, Spine Crawler, Planetary
+  Fortress or Missile Turret draws the range around the places they killed from: the weapon range
+  of the balance data of the build plus the unit's radius, plus Seismic Spines (+2) and Hi-Sec
+  Auto Tracking (+1).
 - The map title is at the top.
 - The time moves in steps of 30 seconds with the `<` `>` buttons or the Left/Right arrows, Home/End
   for the start and the end of the game. `--replay-seconds <seconds>` starts at a given time.
 - The players panel has each player in their color, the clan tag unescaped (`<TAG> Player`), the
-  race and the result, the upgrades finished so far with their button textures and times, and the
-  most effective unit (most enemy units killed so far) and ability (the ability most of the killer
-  units were last commanded, besides move, attack, etc). Hover an icon for its name, click a bar for
-  its counts.
+  race and the result, and the most effective unit (most enemy units killed so far) and ability
+  (the ability most of the killer units were last commanded, besides move, attack, etc). Hover an
+  icon for its name, click a bar for its counts.
+- The Upgrades timeline at the bottom (it folds) has a lane per player with the icon of each
+  upgrade where it finished, the minutes under them and a line at the time shown; hover an icon
+  for its name and time.
+- The size of the text is changed with Ctrl+= / Ctrl+- (Ctrl+0 resets it), kept between runs.
+- The most effective unit of a player is clickable: it shows where it killed. The bars of a unit
+  chosen in a panel breathe (their glow rises and falls).
+- Auto-rotate (top right) turns the camera slowly around the point it looks at; moving the camera
+  stops it.
 
 The button textures are embedded by s2protocol (the `textures` feature).
 
@@ -69,8 +87,10 @@ default for a map, off for a replay; `--terrain-textures true|false` at the star
 geysers and the ore of the mineral fields are rock.
 
 The mineral fields are ores with glowing, twinkling crystals, blue (gold the rich ones), the geysers
-have a green vent puffing gas, and the start locations are landing pads with lights running around
-them.
+are a ring of rock around a vent puffing green gas (violet the rich ones), and the start locations
+are landing pads with lights running around them. The destructible rocks are piles of boulders,
+the debris piles of metal chunks and the unbuildable plates hexagonal plates; the no fly zones a
+red "no" sign under a faint red column of air.
 
 ### Screenshots
 
